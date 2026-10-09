@@ -1,0 +1,2122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>英语练习 · English Drill</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#28313c;
+    --fg:#e8edf4; --muted:#8b98a8; --accent:#4f8cff; --accent2:#7aa9ff;
+    --ok:#35c88a; --warn:#e8b23a; --crit:#f0603c; --radius:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.65 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  #app{display:flex;height:100vh}
+
+  /* 侧栏 */
+  aside{width:196px;flex:0 0 196px;background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;padding:16px 10px}
+  .brand{font-size:15px;font-weight:700;letter-spacing:.3px;padding:0 8px 14px;color:var(--fg)}
+  .brand small{display:block;font-weight:400;color:var(--muted);font-size:11.5px;letter-spacing:0}
+  nav{display:flex;flex-direction:column;gap:4px}
+  nav button{display:flex;align-items:center;gap:9px;background:transparent;border:0;color:var(--muted);
+    text-align:left;padding:10px 12px;border-radius:9px;cursor:pointer;font-size:13.5px;width:100%}
+  nav button:hover{background:var(--panel2);color:var(--fg)}
+  nav button.on{background:#1d2937;color:var(--accent2);font-weight:600}
+  .navfoot{margin-top:auto;color:var(--muted);font-size:11.5px;padding:8px}
+  .navfoot code{color:var(--accent2)}
+
+  main{flex:1;overflow:auto;padding:26px 30px 60px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:16px}
+  .card h2{font-size:14px;margin:0 0 12px;color:var(--muted);font-weight:600}
+  button{cursor:pointer;font-family:inherit}
+  .btn{background:var(--accent);color:#fff;border:0;border-radius:9px;padding:10px 18px;font-size:14px;font-weight:500}
+  .btn:hover{background:var(--accent2)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+  .btn.ghost:hover{color:var(--fg);border-color:#3a4654}
+  .btn.danger{background:transparent;border:1px solid #4a2b26;color:#e08b78}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  input[type=text],input[type=password],input[type=number],select,textarea{
+    background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;
+    padding:9px 11px;font-size:13.5px;font-family:inherit;width:100%}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  textarea{resize:vertical;min-height:70px;font-size:13px}
+  label.fld{display:block;margin-bottom:12px}
+  label.fld span{display:block;color:var(--muted);font-size:12.5px;margin-bottom:5px}
+
+  /* 统计卡 */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
+  .kpi{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .kpi b{display:block;font-size:23px;font-weight:650;line-height:1.25}
+  .kpi span{color:var(--muted);font-size:12px}
+
+  /* 练习 */
+  .practice{max-width:780px;margin:0 auto}
+  .ptop{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px;margin-bottom:10px}
+  /* 题号只在练习页出现，做成醒目但不抢眼的样子 */
+  .qno{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    padding:3px 11px;font-size:13.5px;color:var(--accent2);font-weight:650}
+  .bar{height:5px;background:var(--panel2);border-radius:99px;overflow:hidden;margin-bottom:22px}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));width:0;transition:width .25s}
+  .stem{font-size:19px;line-height:1.75;margin-bottom:22px;white-space:pre-wrap;word-break:break-word}
+  .opts{display:flex;flex-direction:column;gap:10px}
+  .opt{display:flex;gap:13px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);
+    border-radius:11px;padding:14px 16px;text-align:left;color:var(--fg);font-size:15px;transition:.12s}
+  .opt:hover{border-color:#3d4d63;background:#1a2230}
+  .opt .k{flex:0 0 26px;height:26px;border-radius:7px;background:var(--panel2);color:var(--muted);
+    display:grid;place-items:center;font-weight:700;font-size:13px}
+  .opt.picked{border-color:var(--accent);background:#1b2a43}
+  .opt.picked .k{background:var(--accent);color:#fff}
+  .opt.right{border-color:var(--ok);background:#16281f}
+  .opt.right .k{background:var(--ok);color:#08231a}
+  .opt.wrongpick{border-color:var(--crit);background:#2a1a17}
+  .opt.wrongpick .k{background:var(--crit);color:#2a0d07}
+  .opt:disabled{cursor:default}
+  .opt .tag{margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap}
+
+  /* 结果 */
+  .score{text-align:center;padding:14px 0 20px}
+  .score > b{font-size:52px;font-weight:700;line-height:1}
+  .score .lbl{color:var(--muted);margin-top:6px}
+  .kp{display:inline-block;background:#1d2937;color:var(--accent2);border-radius:99px;
+    padding:3px 10px;font-size:12px;margin:2px 4px 2px 0}
+  .kp.weak{background:#3a2418;color:#e8a97a}
+  .find{border-left:3px solid var(--accent);background:var(--panel2);padding:10px 14px;border-radius:0 9px 9px 0;margin-bottom:9px}
+  .find.crit{border-color:var(--crit)}
+  .find.warn{border-color:var(--warn)}
+  .find > b{display:block;margin-bottom:2px}
+  .find .ex{color:var(--muted);font-size:12.5px;margin-top:5px}
+  .find .pickedline{line-height:1.9}
+  .find .pickedline b{font-weight:700}
+  .center{text-align:center}
+  .muted{color:var(--muted)}
+  .crit{color:var(--crit)}
+  .warnc{color:var(--warn)}
+  .okc{color:var(--ok)}
+  .empty{text-align:center;padding:50px 20px;color:var(--muted)}
+  .drop{border:1.5px dashed var(--line);border-radius:12px;padding:34px;text-align:center;color:var(--muted);cursor:pointer}
+  .drop:hover{border-color:var(--accent);color:var(--fg)}
+  .thumb{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
+  .qlist{max-height:520px;overflow:auto}
+  .qitem{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:9px;background:var(--panel2)}
+  .qitem .st{font-size:13.5px;margin-bottom:6px;white-space:pre-wrap}
+  .qitem .meta{color:var(--muted);font-size:12px}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--line);
+    border-top-color:var(--accent);border-radius:99px;animation:sp .7s linear infinite;vertical-align:-2px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#232c38;
+    border:1px solid var(--line);padding:11px 18px;border-radius:10px;font-size:13.5px;z-index:99;
+    box-shadow:0 8px 30px #0008;max-width:70vw}
+  .toast.err{border-color:#5a2c24;color:#f0a08c}
+  .toast.okc{border-color:#24513d;color:#8fe0b8}
+  .warnbox{background:#2c2416;border:1px solid #4d3f1e;color:#e8c37a;border-radius:9px;padding:10px 13px;font-size:12.5px;margin-bottom:12px}
+  .warnbox ul{margin:6px 0 0;padding-left:18px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:1000px){.grid2{grid-template-columns:1fr}}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600}
+  .mb{height:9px;background:var(--panel2);border-radius:99px;overflow:hidden;min-width:70px;display:inline-block;vertical-align:middle}
+  .mb i{display:block;height:100%;background:var(--ok)}
+  .mb i.mid{background:var(--warn)} .mb i.low{background:var(--crit)}
+
+  /* ---- 讲评（第二次做错时展开） ---- */
+  .teach{border:1px solid #4a3a1e;background:#241f14;border-radius:10px;padding:14px;margin-top:8px}
+  .teach h4{margin:0 0 10px;font-size:13.5px;color:var(--warn)}
+  .history{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+  .hrow{display:flex;align-items:center;gap:10px;font-size:13px;background:var(--panel2);
+    border-radius:8px;padding:7px 11px;border-left:3px solid var(--crit)}
+  .hrow.ok{border-left-color:var(--ok)}
+  .hrow .when{color:var(--muted);font-size:12px;min-width:96px}
+  .hrow .what{flex:1}
+  .hrow .mark{font-size:12px}
+
+  /* ---- 对话面板 ---- */
+  .chatwrap{display:flex;gap:14px;height:calc(100vh - 190px);min-height:380px}
+  .chatlist{flex:0 0 220px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  .chatlist .item{padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px}
+  .chatlist .item:hover{background:var(--panel2)}
+  .chatlist .item.on{background:#1d2937;color:var(--accent2)}
+  .chatlist .item .sub{color:var(--muted);font-size:11.5px;margin-top:2px}
+  .chatmain{flex:1;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden}
+  .chathead{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .chathead .ctx{color:var(--muted);font-size:12px;flex:1;min-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .msgs{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+  .msg{max-width:76%;padding:10px 13px;border-radius:12px;font-size:13.5px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+  .msg.user{align-self:flex-end;background:#1d3452;border:1px solid #2a4a72}
+  .msg.assistant{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
+  .msg.error{border-color:#5a2c24;color:#f0a08c}
+  .chatfoot{border-top:1px solid var(--line);padding:10px 12px;display:flex;gap:8px;align-items:flex-end}
+  .chatfoot textarea{min-height:44px;max-height:120px;resize:none;flex:1}
+  .ctxbox{font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);
+    border-radius:8px;padding:8px 11px;margin:0 16px 10px;max-height:120px;overflow:auto;white-space:pre-wrap}
+  .chip{display:inline-block;background:#1d2937;color:var(--accent2);border-radius:99px;padding:2px 9px;font-size:11.5px;margin-right:5px}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <div class="brand">英语练习<small>English Drill</small></div>
+    <nav id="nav">
+      <button data-screen="today" class="on">📅 今日练习</button>
+      <button data-screen="capture">✍️ 录入题目</button>
+      <button data-screen="library">📚 题库管理</button>
+      <button data-screen="groups">🗂️ 单元分组</button>
+      <button data-screen="trash">🗑️ 回收站</button>
+      <button data-screen="stats">📊 掌握情况</button>
+      <button data-screen="chat">💬 问答</button>
+      <button data-screen="settings">⚙️ 设置</button>
+    </nav>
+    <div class="navfoot" id="navfoot"></div>
+  </aside>
+  <main id="main"></main>
+</div>
+
+<script>
+'use strict';
+/* ------------------------------------------------------------------ *
+ * 渲染进程：只通过 window.dsh.invoke 与后端通信，拿不到 Node。
+ * 产品硬性要求：练习过程中绝不显示对错，全部练完才揭晓正确率。
+ * ------------------------------------------------------------------ */
+
+const INVOKE = async (channel, payload) => {
+  if (!window.dsh) throw new Error('未连接到宿主（window.dsh 不存在）');
+  return window.dsh.invoke(channel, payload);
+};
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function toast(msg, kind = '') {
+  const el = document.createElement('div');
+  el.className = `toast ${kind}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), kind === 'err' ? 5200 : 2600);
+}
+
+/* ---------------------------- 路由 ---------------------------- */
+const screens = {};
+let current = 'today';
+function go(name, ...args) {
+  current = name;
+  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.screen === name));
+  if (name === 'practice') {
+    $('#main').innerHTML = '';
+    practiceScreen(...args);
+    return;
+  }
+  $('#main').innerHTML = '';
+  screens[name](...args);
+}
+document.querySelectorAll('#nav button').forEach((b) => (b.onclick = () => go(b.dataset.screen)));
+
+/* ---------------------------- 今日练习 ---------------------------- */
+screens.today = async () => {
+  const main = $('#main');
+  main.innerHTML = `<h1>今日练习</h1><div class="sub" id="todaySub">正在检查今日任务…</div>
+    <div class="kpis" id="todayKpis"></div>
+    <div class="card" style="margin-top:18px"><h2>开始今天的练习</h2>
+      <p class="muted" style="margin:0 0 14px">练习过程中不会告诉你对错，全部做完后才公布正确率，并带你重做错题。</p>
+      <div class="row">
+        <button class="btn" id="startBtn">开始练习</button>
+        <button class="btn ghost" id="seedBtn">试用：导入 6 道示例题</button>
+      </div>
+    </div>
+    <div class="card"><h2>未来 7 天复习量</h2><div id="forecast" class="muted">—</div></div>
+    <div class="card">
+      <h2>考前集训</h2>
+      <p class="muted" style="margin:0 0 12px">
+        把你<b>所有做错过的题</b>排进一周内复习一遍 —— 错得最多的先排，保证一道都不漏。
+      </p>
+      <div class="kpis" id="sprintKpis" style="margin-bottom:14px"></div>
+      <div class="row">
+        <label class="fld" style="flex:0 0 130px;margin-bottom:0"><span>集中复习天数</span>
+          <select id="sprintDays">
+            <option value="3">3 天（突击）</option>
+            <option value="5">5 天</option>
+            <option value="7" selected>7 天（一周）</option>
+            <option value="14">14 天（宽松）</option>
+          </select></label>
+        <label class="fld" style="flex:0 0 130px;margin-bottom:0"><span>每天最多</span>
+          <select id="sprintCap">
+            <option value="20">20 题</option>
+            <option value="30">30 题</option>
+            <option value="60" selected>60 题</option>
+            <option value="120">120 题</option>
+          </select></label>
+        <button class="btn ghost" id="planSprint">查看排期计划</button>
+        <button class="btn" id="startSprint">开始集训</button>
+      </div>
+      <div id="sprintPlan" style="margin-top:14px"></div>
+    </div>`;
+
+  const refreshSprint = async () => {
+    const s = await INVOKE('sprint:status');
+    if (!s.ok) return;
+    $('#sprintKpis').innerHTML = [
+      ['错过的题', s.totalWrong], ['已排期', s.scheduled], ['该复习了', s.dueNow], ['已攻克', s.conquered],
+    ].map(([l, v]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join('');
+    if (s.totalWrong === 0) {
+      $('#startSprint').disabled = true;
+      $('#planSprint').disabled = true;
+      $('#sprintPlan').innerHTML = '<div class="muted">还没有做错过的题 —— 练几轮之后再来集训。</div>';
+    } else {
+      $('#startSprint').disabled = false;
+      $('#planSprint').disabled = false;
+    }
+    if (s.lastSprint) {
+      const when = new Date(s.lastSprint.appliedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      $('#sprintPlan').innerHTML = `<div class="muted" style="font-size:12.5px">
+        上次集训：${when} 排了 ${s.lastSprint.moved} 道题（${s.lastSprint.days} 天）。
+      </div>`;
+    }
+  };
+
+  const renderPlan = (p) => {
+    if (p.empty) {
+      $('#sprintPlan').innerHTML = `<div class="muted">${esc(p.message)}</div>`;
+      return;
+    }
+    $('#sprintPlan').innerHTML = `
+      <div class="hintbox">${esc(p.summary)}</div>
+      <table><thead><tr><th>第几天</th><th>日期</th><th>题量</th><th>主要考点</th></tr></thead>
+        <tbody>${p.plan.map((d) => `<tr>
+          <td>第 ${d.dayIndex} 天</td><td>${esc(d.date)}</td><td>${d.count} 题</td>
+          <td>${(d.knowledgePoints || []).slice(0, 4).map((k) => `<span class="chip">${esc(k)}</span>`).join('') || '<span class="muted">—</span>'}</td>
+        </tr>`).join('')}</tbody></table>`;
+  };
+
+  $('#planSprint').onclick = async () => {
+    const r = await INVOKE('sprint:plan', {
+      days: Number($('#sprintDays').value),
+      perDayCap: Number($('#sprintCap').value),
+    });
+    if (!r.ok) return toast(r.error, 'err');
+    renderPlan(r);
+    toast(r.empty ? r.message : r.summary, r.empty ? 'err' : 'okc');
+  };
+
+  $('#startSprint').onclick = async () => {
+    const days = Number($('#sprintDays').value);
+    const r = await INVOKE('sprint:quickStart', { days, perDayCap: Number($('#sprintCap').value) });
+    if (!r.ok) return toast(r.error, 'err');
+    if (r.empty) return toast(r.message, 'err');
+    renderPlan(r.plan);
+    toast(r.message, 'okc');
+    refreshSprint();
+    refresh();
+  };
+
+  const refresh = async () => {
+    const [c, ov] = await Promise.all([INVOKE('questions:counts'), INVOKE('stats:overview')]);
+    if (!c.ok) return;
+    const k = c.counts;
+    $('#todaySub').textContent = `${c.today}｜题库共 ${k.total} 题，其中已学过 ${k.learned} 题`;
+    $('#todayKpis').innerHTML = [
+      ['待复习', k.due], ['未学过', k.new], ['已学过', k.learned], ['题库总量', k.total],
+    ].map(([l, v]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join('');
+    if (ov.ok) {
+      const max = Math.max(1, ...ov.forecast.map((f) => f.count));
+      $('#forecast').innerHTML = ov.forecast.map((f) => {
+        const pct = Math.round((f.count / max) * 100);
+        return `<div class="row" style="margin-bottom:6px">
+          <span class="muted" style="width:110px;font-size:12.5px">${esc(f.day)}</span>
+          <span class="mb" style="width:220px"><i style="width:${pct}%" class="${pct > 66 ? 'low' : pct > 33 ? 'mid' : ''}"></i></span>
+          <span style="font-size:13px">${f.count} 题</span></div>`;
+      }).join('');
+    }
+    const counts = await INVOKE('questions:counts');
+    $('#startBtn').disabled = counts.ok && counts.counts.total === 0;
+    if ($('#startBtn').disabled) $('#startBtn').textContent = '题库为空，请先录入题目';
+  };
+
+  $('#seedBtn').onclick = async () => {
+    const r = await INVOKE('demo:seed');
+    toast(r.ok ? `已导入示例题：新增 ${r.created} 道` : r.error, r.ok ? 'okc' : 'err');
+    refresh();
+  };
+  $('#startBtn').onclick = async () => {
+    const r = await INVOKE('practice:start', {});
+    if (!r.ok) return toast(r.error, 'err');
+    if (r.empty) return toast(r.message, 'err');
+    go('practice', r.session, r.resumed);
+  };
+  refresh();
+  refreshSprint();
+};
+
+/* ---------------------------- 练习流程 ---------------------------- */
+async function practiceScreen(session, resumed) {
+  const main = $('#main');
+  let items = session.items;
+  let idx = 0;
+  let answered = {};
+
+  // 续练时跳过已作答的题
+  if (resumed) {
+    for (const it of items) if (it.picked !== null) answered[it.questionId] = it.picked;
+    const firstUnanswered = items.findIndex((it) => it.picked === null);
+    idx = firstUnanswered === -1 ? items.length : firstUnanswered;
+  }
+
+  function render() {
+    if (idx >= items.length) return renderFinish();
+    const it = items[idx];
+    const done = Object.keys(answered).length;
+    const sh = session.shuffling || {};
+    // 把当前的乱序状态明示出来，避免"改了设置却没生效"的猜测
+    const shuffleNote = [
+      sh.order ? '题目乱序' : '题目按录入顺序',
+      sh.options ? '选项乱序' : '选项固定',
+    ].join('｜');
+    main.innerHTML = `<div class="practice">
+      <div class="ptop">
+        <span class="row" style="gap:8px">
+          <b class="qno">第 ${idx + 1} 题</b>
+          <span class="muted">/ 共 ${items.length} 题${session.round > 1 ? `（第 ${session.round} 轮·错题重做）` : ''}</span>
+        </span>
+        <span>已作答 ${done} 题</span>
+      </div>
+      <div class="bar"><i style="width:${(idx / items.length) * 100}%"></i></div>
+      <div class="stem">${esc(it.stem)}</div>
+      <div class="opts" id="opts">
+        ${Object.entries(it.options).map(([k, v]) => `<button class="opt" data-k="${k}">
+            <span class="k">${k}</span><span>${esc(v)}</span></button>`).join('')}
+      </div>
+      <div id="feedback"></div>
+      <div class="row" style="margin-top:18px;justify-content:space-between">
+        <span class="muted" style="font-size:12.5px">选完直接进入下一题，练习中不提示对错（${esc(shuffleNote)}）</span>
+        <button class="btn ghost" id="quitBtn">结束本次</button>
+      </div>
+    </div>`;
+
+    $('#opts').querySelectorAll('.opt').forEach((btn) => {
+      btn.onclick = async () => {
+        const picked = btn.dataset.k;
+        // 界面只记录选择，不做任何对错判断或高亮
+        $('#opts').querySelectorAll('.opt').forEach((b) => { b.disabled = true; b.classList.remove('picked'); });
+        btn.classList.add('picked');
+        answered[it.questionId] = picked;
+        const r = await INVOKE('practice:answer', { sessionId: session.id, questionId: it.questionId, picked });
+        if (!r.ok) { toast(r.error, 'err'); return; }
+
+        // 第二次（及以上）做错 → 在题目下方直接展开讲评与对话窗口
+        const t = await INVOKE('teach:mistake', { questionId: it.questionId, sessionId: session.id });
+        if (t.ok && t.wrongCount >= 2) {
+          renderInlineTeach(it, picked, t, () => { idx += 1; render(); });
+        } else {
+          setTimeout(() => { idx += 1; render(); }, 180);
+        }
+      };
+    });
+    $('#quitBtn').onclick = () => renderFinish(true);
+  }
+
+  /**
+   * 第二次做错时，在题目下方就地展开：正确答案 + 知识点 + 前几次选了什么 + 对话窗口。
+   *
+   * 为什么放在题目下方而不是弹窗：用户明确要求"在题目下方出现对话窗口"，
+   * 这样能一边看着题目一边问，不用在两个窗口之间来回切。
+   */
+  function renderInlineTeach(it, picked, t, onNext) {
+    const q = t.question;
+    const feedback = $('#feedback');
+    if (!feedback) return onNext();
+
+    const historyHtml = (t.history || []).slice(0, 6).map((h) => `
+      <div class="hrow ${h.correct ? 'ok' : ''}">
+        <span class="when">${esc(h.day || '')} 第${h.round}轮</span>
+        <span class="what">选了 <b class="${h.correct ? 'okc' : 'crit'}">${esc(h.picked || '未作答')}</b>${h.pickedText ? ` · ${esc(h.pickedText)}` : ''}</span>
+        <span class="mark">${h.correct ? '<span class="okc">对</span>' : '<span class="crit">错</span>'}</span>
+      </div>`).join('');
+
+    // 提示：你这次选的和上次选的是不是同一个 —— 这决定了讲评的方向
+    const prevWrong = (t.history || []).filter((h) => !h.correct && h.picked);
+    const lastWrong = prevWrong.find((h) => h.picked !== picked) ? prevWrong.find((h) => h.picked !== picked) : prevWrong[0];
+    const sameAsLast = lastWrong && lastWrong.picked === picked;
+
+    feedback.innerHTML = `
+      <div class="teach" style="margin-top:16px">
+        <h4>这道题你已经错 ${t.wrongCount} 次了</h4>
+        <div style="margin-bottom:10px">
+          你这次选了 <b class="crit">${esc(picked)}</b>${q.options[picked] ? ` · ${esc(q.options[picked])}` : ''}，
+          正确答案是 <b class="okc">${esc(q.answer)}</b>${q.answerText ? ` · ${esc(q.answerText)}` : ''}
+        </div>
+        ${q.knowledgePoints.length
+          ? `<div style="margin-bottom:10px">考点：${q.knowledgePoints.map((k) => `<span class="chip">${esc(k)}</span>`).join('')}</div>`
+          : '<div class="muted" style="margin-bottom:10px">这道题还没标注考点。</div>'}
+        ${sameAsLast
+          ? `<div class="muted" style="font-size:12.5px;margin-bottom:8px">注意：这次和上次选的是同一个选项，说明这个考点还没弄明白。</div>`
+          : ''}
+        ${q.explanation ? `<div style="margin-bottom:10px">${esc(q.explanation)}</div>` : ''}
+        <div class="muted" style="font-size:12.5px;margin-bottom:6px">你前几次选的：</div>
+        <div class="history">${historyHtml || '<div class="muted">没有更早的记录</div>'}</div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn ghost" id="nextQ">懂了，继续下一题</button>
+          <button class="btn" id="askHere">就这道题问问</button>
+        </div>
+        <div id="inlineChat"></div>
+      </div>`;
+
+    $('#nextQ').onclick = onNext;
+    $('#askHere').onclick = () => {
+      // 就地展开对话输入区（不遮挡题目，就在下面）
+      const box = $('#inlineChat');
+      if ($('#inlineChatInput')) { $('#inlineChatInput').focus(); return; }
+      box.innerHTML = `
+        <div class="teach" style="margin-top:12px;border-color:#2a4a72;background:#151d29">
+          <h4 style="color:var(--accent2)">就这道题提问</h4>
+          <div class="muted" style="font-size:12.5px;margin-bottom:8px">
+            会自动带上题干、选项、考点和你刚才的作答记录，不用再抄一遍。
+          </div>
+          <div class="msgs" id="inlineMsgs" style="max-height:260px;padding:0;background:transparent"></div>
+          <div class="chatfoot" style="border:0;padding:8px 0 0">
+            <textarea id="inlineChatInput" placeholder="例如：为什么不能选我选的那个？这个考点怎么记？"></textarea>
+            <button class="btn" id="inlineSend">发送</button>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button class="btn ghost" id="copyQ" style="font-size:12px">复制内容发给我</button>
+          </div>
+        </div>`;
+
+      let threadId = null;
+      let busy = false;
+      const msgs = $('#inlineMsgs');
+      const input = $('#inlineChatInput');
+
+      const bubble = (role, text, isError) => {
+        const el = document.createElement('div');
+        el.className = `msg ${role}${isError ? ' error' : ''}`;
+        el.textContent = text;
+        msgs.appendChild(el);
+        msgs.scrollTop = msgs.scrollHeight;
+      };
+
+      const send = async () => {
+        const text = input.value.trim();
+        if (!text || busy) return;
+        busy = true;
+        input.value = '';
+        bubble('user', text);
+        const pendingBubble = document.createElement('div');
+        pendingBubble.className = 'msg assistant';
+        pendingBubble.textContent = '…';
+        msgs.appendChild(pendingBubble);
+        msgs.scrollTop = msgs.scrollHeight;
+
+        const r = await INVOKE('chat:ask', { threadId, questionId: q.id, message: text });
+        pendingBubble.remove();
+        if (r.ok) {
+          threadId = r.threadId;
+          bubble('assistant', r.reply);
+        } else {
+          if (r.threadId) threadId = r.threadId;
+          bubble('assistant', r.error || '回答失败', true);
+          if (r.code === 'NO_MODEL' && r.context) {
+            const b = document.createElement('button');
+            b.className = 'btn ghost';
+            b.style.cssText = 'align-self:flex-start;font-size:12px';
+            b.textContent = '复制这道题的内容';
+            b.onclick = () => copyText(`${r.context}\n\n我的问题：${text}`);
+            msgs.appendChild(b);
+          }
+        }
+        busy = false;
+        input.focus();
+      };
+
+      $('#inlineSend').onclick = send;
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      };
+      $('#copyQ').onclick = () => {
+        const lines = [
+          '这道英语单选题我反复做错，帮我讲讲：',
+          '',
+          `题干：${q.stem}`,
+          ...Object.entries(q.options).map(([L, v]) => `${L}. ${v}`),
+          `正确答案：${q.answer}${q.answerText ? ` · ${q.answerText}` : ''}`,
+          q.knowledgePoints.length ? `考点：${q.knowledgePoints.join('、')}` : '',
+          prevWrong.length ? `我错选的：${prevWrong.map((h) => h.picked).join('、')}` : '',
+          `做错次数：${t.wrongCount}`,
+        ].filter(Boolean).join('\n');
+        copyText(lines);
+      };
+      input.focus();
+    };
+  }
+
+  async function renderFinish(partial = false) {
+    main.innerHTML = `<div class="practice"><div class="card"><span class="spin"></span> 正在结算…</div></div>`;
+    const r = await INVOKE('practice:finish', { sessionId: session.id });
+    if (!r.ok) { main.innerHTML = `<div class="crit">${esc(r.error)}</div>`; return; }
+    renderResultCard(main, r.summary, r.replay, partial);
+  }
+
+  render();
+}
+
+/**
+ * 渲染结果页。练习结束与"回看历史"共用这一段，保证两处显示完全一致。
+ * @param {HTMLElement} main
+ * @param {object} s    finishSession 返回的 summary
+ * @param {Array}  replay sessionReplay 返回的明细
+ * @param {boolean} partial 是否提前结束
+ */
+function renderResultCard(main, s, replay, partial) {
+  const pct = Math.round(s.accuracy * 100);
+  const color = pct >= 80 ? 'var(--ok)' : pct >= 60 ? 'var(--warn)' : 'var(--crit)';
+
+  const wrongHtml = (s.wrong || []).map((w, i) => `
+    <div class="find crit">
+      <b>第 ${i + 1} 题 ${esc(String(w.stem).slice(0, 90))}${String(w.stem).length > 90 ? '…' : ''}</b>
+      <div class="pickedline">你选的是 <b class="crit">${esc(w.picked || '未作答')}</b>，正确答案是 <b class="okc">${esc(w.answer)}</b></div>
+      ${w.explanation ? `<div class="ex">解析：${esc(w.explanation)}</div>` : ''}
+      ${(w.knowledgePoints || []).length ? `<div style="margin-top:6px">${w.knowledgePoints.map((k) => `<span class="kp weak">${esc(k)}</span>`).join('')}</div>` : ''}
+      ${w.needsTeaching ? `
+        <div class="teach" style="margin-top:10px">
+          <h4>这道题你已经错 ${w.wrongCount} 次了</h4>
+          <div class="muted" style="font-size:12.5px;margin-bottom:8px">
+            考点：${(w.knowledgePoints || []).join('、') || '未标注'}｜不是手滑，是这个考点还没掌握。
+          </div>
+          <button class="btn" data-teach="${w.questionId}" style="font-size:12.5px;padding:6px 14px">看我前几次选了什么 + 讲评</button>
+        </div>` : `
+        <div style="margin-top:8px"><button class="btn ghost" data-teach="${w.questionId}" style="font-size:12px;padding:4px 12px">看讲解</button></div>`}
+    </div>`).join('') || '<div class="muted">全对，没有错题。</div>';
+
+  const kpHtml = (s.knowledgePoints || []).length
+    ? s.knowledgePoints.map((k) => `<span class="kp weak">${esc(k.name)} ×${k.count}</span>`).join('')
+    : '<span class="muted">—</span>';
+
+  const rounds = [...new Set((replay || []).map((x) => x.round))].sort((a, b) => a - b);
+  const timelineHtml = rounds.map((rd) => {
+    const rows = (replay || []).filter((x) => x.round === rd);
+    const right = rows.filter((x) => x.correct).length;
+    const answered = rows.filter((x) => x.correct !== null).length;
+    return `<div class="muted" style="font-size:12.5px;margin-bottom:6px">第 ${rd} 轮：作答 ${answered} 题，答对 ${right} 题</div>
+      <table><tbody>${rows.map((x, i) => `<tr>
+        <td>第 ${i + 1} 题</td>
+        <td>${esc(String(x.stem).slice(0, 46))}${String(x.stem).length > 46 ? '…' : ''}</td>
+        <td>${x.picked ? `选了 <b class="${x.correct ? 'okc' : 'crit'}">${esc(x.picked)}</b>` : '<span class="muted">未作答</span>'}</td>
+        <td>${x.correct === null ? '' : x.correct ? '<span class="okc">对</span>' : `<span class="crit">错，应为 ${esc(x.answer)}</span>`}</td>
+      </tr>`).join('')}</tbody></table>`;
+  }).join('');
+
+  main.innerHTML = `<div class="practice">
+    <div class="card">
+      <div class="score">
+        <b style="color:${color}">${pct}%</b>
+        <div class="lbl">正确率：答对 ${s.correct}/${s.total} 题${partial ? '（本次为提前结束）' : ''}${s.round > 1 ? `，共 ${s.round} 轮` : ''}</div>
+      </div>
+      <div class="row" style="justify-content:center">
+        ${s.needsRetry ? `<button class="btn" id="retryBtn">带我重做错题（${(s.wrong || []).length} 题）</button>` : ''}
+        <button class="btn ghost" id="againBtn">返回今日</button>
+      </div>
+    </div>
+    <div class="card"><h2>错题解析</h2>${wrongHtml}</div>
+    <div class="card"><h2>本次涉及的知识点</h2>${kpHtml}</div>
+    <div class="card"><h2>复习安排</h2>
+      <table><tbody>${(s.applied || []).slice(0, 20).map((a) => `<tr>
+        <td>第 ${a.questionId} 题</td>
+        <td>${a.finalCorrect ? '<span class="okc">最终做对</span>' : '<span class="crit">仍错</span>'}</td>
+        <td class="muted">${a.firstTryCorrect === null || a.firstTryCorrect === undefined ? '—' : a.firstTryCorrect ? '一次做对' : `做了 ${a.attempts} 次`}</td>
+        <td>${a.intervalDays === null || a.intervalDays === undefined
+          ? (a.dueInDays === null || a.dueInDays === undefined ? '<span class="muted">—</span>'
+            : a.alreadyDue ? '<span class="warnc">现在待复习</span>'
+            : a.dueInDays === 1 ? '下次复习：明天' : `下次复习：${a.dueInDays} 天后`)
+          : `下次复习：${a.intervalDays >= 1 ? Math.round(a.intervalDays) + ' 天后' : '很快'}`}</td>
+      </tr>`).join('')}</tbody></table>
+    </div>
+    ${timelineHtml ? `<div class="card"><h2>作答时间线（含错题重做轮）</h2>${timelineHtml}</div>` : ''}
+  </div>`;
+
+  const retryBtn = $('#retryBtn');
+  if (retryBtn) {
+    retryBtn.onclick = async () => {
+      const rr = await INVOKE('practice:retry', { sessionId: s.sessionId });
+      if (!rr.ok) return toast(rr.error, 'err');
+      if (rr.empty) { toast('错题已全部订正'); go('today'); return; }
+      go('practice', rr.session, false);
+    };
+  }
+  $('#againBtn').onclick = () => { location.hash = ''; go('today'); };
+
+  // 讲评入口（错多次的题会显示更醒目的按钮）
+  main.querySelectorAll('[data-teach]').forEach((btn) => {
+    btn.onclick = () => showTeachDock(Number(btn.dataset.teach), s.sessionId);
+  });
+}
+
+
+/* ---------------------------- 录入题目 ---------------------------- *
+ * 三条录入路径：
+ *   ① 文本导入（主路径）：题目文本粘进来即可，解析器负责拆题干/选项/答案，核对后入库
+ *   ② 图片识别（备用）：应用内调读图模型，适合批量且不想经过宿主的场景
+ *   ③ 手动录入：少量题目直接敲
+ * ------------------------------------------------------------------ */
+screens.capture = async () => {
+  const main = $('#main');
+  let pending = [];      // 待确认入库的题
+  let pendingSource = 'text';
+  let images = [];       // 已选图片（备用路径）
+  let activeTab = 'text';
+
+  main.innerHTML = `
+    <h1>录入题目</h1>
+    <div class="sub">把题目文本粘进来 → 自动拆出题干/选项/答案 → 核对修改 → 入库成为每日练习。</div>
+
+    <div class="card">
+      <div class="row" style="gap:8px;margin-bottom:14px">
+        <button class="btn" data-tab="text">① 文本导入</button>
+        <button class="btn ghost" data-tab="image">② 图片识别（备用）</button>
+        <button class="btn ghost" data-tab="manual">③ 手动录入</button>
+      </div>
+
+      <div id="tab-text">
+        <div class="hintbox">
+          <b>怎么用：</b>把试卷照片发给能读图的模型（或发给我），把读出来的题目文本整段粘到下面。
+          选项支持 <code>A. go</code> / <code>A、go</code> / <code>(A) go</code> / <code>A: go</code>，
+          排成一行也能认；答案支持 <code>答案：B</code>、<code>Answer: B</code>、单独一行 <code>B</code>。
+        </div>
+        <label class="fld"><span>题目文本</span>
+          <textarea id="pasteText" style="min-height:220px" placeholder="21. He ____ to school by bus every day.
+A. go
+B. goes
+C. going
+D. gone
+答案：B
+
+22. The report ____ by the team last week.
+A. completes  B. completed  C. was completed  D. has completed
+答案：C"></textarea>
+        </label>
+        <label class="fld"><span>答案表（可选，答案单独列在卷末时用）</span>
+          <input type="text" id="answerKey" placeholder="例如 1-5 BCDAB  或  21-B 22-C 23-B" />
+        </label>
+        <div class="row">
+          <label class="fld" style="flex:1;min-width:220px;margin-bottom:0">
+            <span>归入分组（可选，按单元归类；填新名字会自动创建）</span>
+            <input type="text" id="importGroup" list="groupOptions" placeholder="例如 第一单元 / Unit 3 / 虚拟语气专项" />
+            <datalist id="groupOptions"></datalist>
+          </label>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" id="parseBtn">解析并预览</button>
+          <button class="btn ghost" id="sampleFill">填入示例文本</button>
+          <span class="muted" id="parseHint" style="font-size:12.5px"></span>
+        </div>
+      </div>
+
+      <div id="tab-image" style="display:none">
+        <div class="hintbox">
+          这条路需要你自己配置一个<b>能读图</b>的模型（设置页里选）。DeepSeek 不能读图，
+          可选智谱 glm-4v、通义 qwen-vl-max 等。如果只是偶尔录题，用「文本导入」更快。
+        </div>
+        <div class="drop" id="drop">点击选择图片，或把图片拖到这里 / 直接 Ctrl+V 粘贴截图</div>
+        <div class="row" id="thumbs" style="margin-top:12px"></div>
+        <label class="row" style="margin-top:12px;gap:8px;color:var(--muted);font-size:13px">
+          <input type="checkbox" id="hasAnswer" checked style="width:auto" />
+          卷面上印有答案（识别时会尝试找出答案；没有答案请取消勾选，避免模型瞎猜）
+        </label>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" id="ocrBtn" disabled>开始识别</button>
+          <span class="muted" id="ocrHint" style="font-size:12.5px">还没有选择图片</span>
+        </div>
+      </div>
+
+      <div id="tab-manual" style="display:none">
+        <div class="grid2">
+          <label class="fld"><span>题干</span><textarea id="mStem" placeholder="He ____ to school every day."></textarea></label>
+          <div>
+            <label class="fld"><span>选项 A</span><input type="text" id="mA" placeholder="go" /></label>
+            <label class="fld"><input type="text" id="mB" placeholder="goes" /></label>
+            <label class="fld"><input type="text" id="mC" placeholder="going" /></label>
+            <label class="fld"><input type="text" id="mD" placeholder="gone" /></label>
+          </div>
+        </div>
+        <div class="row">
+          <label class="fld" style="flex:0 0 130px"><span>正确答案</span>
+            <select id="mAnswer"><option value="">请选择</option><option>A</option><option>B</option><option>C</option><option>D</option></select>
+          </label>
+          <label class="fld" style="flex:1;min-width:200px"><span>知识点（用 、或 , 分隔）</span><input type="text" id="mKp" placeholder="一般现在时、主谓一致" /></label>
+          <label class="fld" style="flex:0 0 110px"><span>难度</span>
+            <select id="mDiff"><option value="easy">简单</option><option value="medium" selected>中等</option><option value="hard">困难</option></select>
+          </label>
+        </div>
+        <label class="fld"><span>解析（可留空）</span><textarea id="mExp" style="min-height:52px"></textarea></label>
+        <div class="row">
+          <button class="btn" id="mSave">保存这道题</button>
+          <button class="btn ghost" id="mAnalyze">让模型判断答案和知识点</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="reviewArea"></div>`;
+
+  // 页签切换
+  const showTab = (t) => {
+    activeTab = t;
+    for (const name of ['text', 'image', 'manual']) {
+      $('#tab-' + name).style.display = name === t ? '' : 'none';
+    }
+    document.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('ghost', b.dataset.tab !== t));
+  };
+  document.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+
+  // 分组下拉候选：让用户能直接选已有分组，也能输入新名字
+  (async () => {
+    const r = await INVOKE('groups:list');
+    if (r.ok) {
+      $('#groupOptions').innerHTML = (r.groups || [])
+        .map((g) => `<option value="${esc(g.name)}">${g.total} 题</option>`)
+        .join('');
+    }
+  })();
+
+  /* ---------------- ① 文本导入 ---------------- */
+  $('#sampleFill').onclick = () => {
+    $('#pasteText').value = `Choose the best answer for each blank.
+
+21. He ____ to school by bus every day.
+A. go
+B. goes
+C. going
+D. gone
+
+22. The report ____ by the team last week.
+A. completes  B. completed  C. was completed  D. has completed
+
+23. I have lived here ____ 2010.
+A. for
+B. since
+C. from
+D. during
+
+Answers: 21-B  22-C  23-B`;
+    $('#answerKey').value = '';
+    $('#parseHint').textContent = '已填入示例，点「解析并预览」看效果';
+  };
+
+  $('#parseBtn').onclick = async () => {
+    const text = $('#pasteText').value;
+    if (!text.trim()) return toast('先粘贴题目文本', 'err');
+    const r = await INVOKE('import:parseText', { text, answerKey: $('#answerKey').value });
+    if (!r.ok) return toast(r.error, 'err');
+    if (r.questions.length === 0) {
+      $('#reviewArea').innerHTML = `<div class="card"><div class="crit">没能解析出题目。</div>
+        <div class="muted">${(r.warnings || []).map(esc).join('<br>')}</div></div>`;
+      return;
+    }
+    $('#parseHint').textContent = `解析出 ${r.stats.parsed} 题，其中 ${r.stats.withAnswer} 题带答案，${r.stats.needAttention} 题需要你确认`;
+    // 入库时统一归入所选分组
+    const gname = ($('#importGroup')?.value || '').trim();
+    pending = r.questions.map((q) => ({ ...q, groupName: gname }));
+    pendingSource = 'text';
+    renderReview(r.warnings);
+  };
+
+  /* ---------------- ② 图片识别（备用） ---------------- */
+  const thumbs = $('#thumbs');
+  const renderThumbs = () => {
+    thumbs.innerHTML = images.map((im) => `
+      <div style="text-align:center">
+        <img class="thumb" src="data:${im.mime};base64,${im.base64}" title="${esc(im.name)}" />
+        <div class="muted" style="font-size:11px">${esc(im.name || '粘贴的截图')}</div>
+      </div>`).join('');
+    $('#ocrBtn').disabled = images.length === 0;
+    $('#ocrHint').textContent = images.length ? `已选 ${images.length} 张` : '还没有选择图片';
+  };
+
+  const addImages = (files) => {
+    for (const f of files) if (f.base64) images.push({ name: f.name, base64: f.base64, mime: f.mime || 'image/png' });
+    renderThumbs();
+  };
+
+  $('#drop').onclick = async () => {
+    const files = await pickImages();
+    if (files.length) addImages(files);
+  };
+  document.body.addEventListener('dragover', (e) => e.preventDefault());
+  document.body.addEventListener('drop', async (e) => {
+    if (current !== 'capture' || activeTab !== 'image') return;
+    e.preventDefault();
+    addImages(await filesToBase64([...(e.dataTransfer?.files || [])]));
+  });
+  document.body.addEventListener('paste', async (e) => {
+    if (current !== 'capture' || activeTab !== 'image') return;
+    const items = [...(e.clipboardData?.items || [])].filter((i) => i.type.startsWith('image/'));
+    if (!items.length) return;
+    addImages(await filesToBase64(items.map((i) => i.getAsFile()).filter(Boolean)));
+  });
+
+  $('#ocrBtn').onclick = async () => {
+    $('#ocrBtn').disabled = true;
+    const area = $('#reviewArea');
+    const all = [];
+    const warns = [];
+    for (let i = 0; i < images.length; i += 1) {
+      area.innerHTML = `<div class="card"><span class="spin"></span> 正在识别第 ${i + 1} / ${images.length} 张…</div>`;
+      const r = await INVOKE('capture:extract', {
+        imageBase64: images[i].base64,
+        mime: images[i].mime,
+        answerInSource: $('#hasAnswer').checked,
+      });
+      if (!r.ok) { warns.push(`第 ${i + 1} 张识别失败：${r.error}`); continue; }
+      all.push(...r.questions);
+      warns.push(...(r.warnings || []));
+    }
+    $('#ocrBtn').disabled = false;
+    if (all.length === 0) {
+      area.innerHTML = `<div class="card"><div class="crit">没有识别出题目。</div>
+        <div class="muted" style="margin-top:8px">${warns.map(esc).join('<br>')}</div>
+        <div class="muted" style="margin-top:8px">可以改用「文本导入」，或在设置里换一个更强的读图模型。</div></div>`;
+      return;
+    }
+    pending = all;
+    pendingSource = 'image';
+    renderReview(warns);
+  };
+
+  /* ---------------- ③ 手动录入 ---------------- */
+  const manualQuestion = () => {
+    const options = {};
+    for (const L of ['A', 'B', 'C', 'D']) {
+      const v = $(`#m${L}`).value.trim();
+      if (v) options[L] = v.replace(new RegExp(`^${L}\\s*[.、)．]\\s*`, 'i'), '');
+    }
+    return {
+      stem: $('#mStem').value.trim(),
+      options,
+      answer: $('#mAnswer').value,
+      explanation: $('#mExp').value.trim(),
+      knowledgePoints: $('#mKp').value.split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean),
+      difficulty: $('#mDiff').value,
+    };
+  };
+
+  $('#mSave').onclick = async () => {
+    const q = manualQuestion();
+    const r = await INVOKE('questions:save', { questions: [q], onDuplicate: 'skip' });
+    if (!r.ok) return toast(r.error, 'err');
+    const one = r.results[0];
+    if (!one.ok) return toast('保存失败：' + one.errors.join('；'), 'err');
+    if (one.action === 'duplicate' || one.action === 'skipped') return toast('这道题已存在，已跳过', 'err');
+    toast('已保存，进入每日练习队列', 'okc');
+    ['mStem', 'mA', 'mB', 'mC', 'mD', 'mExp', 'mKp'].forEach((id) => ($(`#${id}`).value = ''));
+    $('#mAnswer').value = '';
+  };
+
+  $('#mAnalyze').onclick = async () => {
+    const q = manualQuestion();
+    if (!q.stem || Object.keys(q.options).length < 2) return toast('先填题干和至少两个选项', 'err');
+    toast('正在让模型判断答案…');
+    const r = await INVOKE('capture:analyze', { question: q });
+    if (!r.ok) return toast(r.error || '分析失败', 'err');
+    if (r.answer) $('#mAnswer').value = r.answer;
+    if (r.explanation) $('#mExp').value = r.explanation;
+    if (r.knowledgePoints?.length) $('#mKp').value = r.knowledgePoints.join('、');
+    if (r.difficulty) $('#mDiff').value = r.difficulty;
+    toast(`模型判断答案：${r.answer || '不确定（请自己选）'}`, 'okc');
+  };
+
+  /* ---------------- 核对与入库（三条路径共用） ---------------- */
+  function renderReview(warns) {
+    const needFix = pending.filter((q) => !q.stem || Object.keys(q.options || {}).length < 2 || !q.answer).length;
+    const groupName = ($('#importGroup')?.value || '').trim();
+    $('#reviewArea').innerHTML = `
+      <div class="card">
+        <h2>核对修改（共 ${pending.length} 道${needFix ? `，其中 ${needFix} 道必须补全后才能入库` : ''}）</h2>
+        <div class="row" style="margin-bottom:12px">
+          <label class="fld" style="flex:1;min-width:240px;margin-bottom:0">
+            <span>这一批归入的分组（改这里会应用到全部 ${pending.length} 道）</span>
+            <input type="text" id="batchGroup" list="groupOptions" value="${esc(groupName)}" placeholder="不填则不分组" />
+          </label>
+        </div>
+        ${warns && warns.length ? `<div class="warnbox">解析时有 ${warns.length} 处要你确认：<ul>${warns.slice(0, 12).map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
+        <div class="row" style="justify-content:space-between;margin-bottom:8px">
+          <span class="row" style="gap:10px">
+            <label class="row" style="gap:6px;color:var(--muted);font-size:12.5px">
+              <input type="checkbox" id="pickAll" style="width:auto" /> 全选
+            </label>
+            <span class="muted" id="pickInfo" style="font-size:12.5px">未选中</span>
+          </span>
+          <span class="row" style="gap:8px">
+            <button class="btn danger" id="delPicked" disabled>删除选中的题</button>
+            <button class="btn danger" id="clearAll">全部清空</button>
+          </span>
+        </div>
+        <div class="qlist" id="qlist"></div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn" id="saveAll">全部入库（${pending.length} 道）</button>
+          <button class="btn ghost" id="dropAll">放弃本次</button>
+        </div>
+      </div>`;
+
+    // 注意顺序：先定义"选中状态"的读写与按钮，再渲染列表。
+    // renderQList 内部会用到 window.__updatePick，顺序颠倒会导致勾选后按钮不响应。
+    const pickedIdx = () => [...document.querySelectorAll('.qpick:checked')].map((c) => Number(c.dataset.i));
+    const updatePick = () => {
+      const n = pickedIdx().length;
+      const info = $('#pickInfo');
+      if (info) info.textContent = n ? `已选中 ${n} 道` : '未选中';
+      const del = $('#delPicked');
+      if (del) del.disabled = n === 0;
+      const all = $('#pickAll');
+      if (all) all.checked = n > 0 && n === pending.length;
+    };
+    window.__updatePick = updatePick;
+
+    $('#pickAll').onchange = (e) => {
+      document.querySelectorAll('.qpick').forEach((c) => { c.checked = e.target.checked; });
+      updatePick();
+    };
+    $('#delPicked').onclick = () => {
+      collect(); // 先保存用户已做的修改，避免删除时丢失其它题的编辑
+      const idxs = pickedIdx().sort((a, b) => b - a); // 从后往前删，避免索引错位
+      if (!idxs.length) return;
+      for (const i of idxs) pending.splice(i, 1);
+      if (pending.length === 0) {
+        $('#reviewArea').innerHTML = '<div class="card"><div class="muted">已删除全部待入库的题目。可以重新粘贴或放弃。</div></div>';
+        return;
+      }
+      toast(`已删除 ${idxs.length} 道`, 'okc');
+      renderReview([]);
+    };
+    $('#clearAll').onclick = () => {
+      if (!confirm(`确定清空全部 ${pending.length} 道待入库的题？\n\n（这些题还没入库，清空后需要重新粘贴）`)) return;
+      pending = [];
+      $('#reviewArea').innerHTML = '<div class="card"><div class="muted">已清空待入库的题目。</div></div>';
+    };
+
+    renderQList();
+
+    // 批量改分组：立刻反映到每道题上，避免"改了没生效"
+    $('#batchGroup').oninput = (e) => {
+      const v = e.target.value.trim();
+      for (const q of pending) q.groupName = v;
+      // 同步每道题那一行的小输入框
+      $('#qlist')?.querySelectorAll('[data-f=group]').forEach((el) => (el.value = v));
+      const gn = $('#importGroup');
+      if (gn) gn.value = v;
+    };
+
+    $('#saveAll').onclick = async () => {
+      collect();
+      const bad = pending.filter((q) => !q.answer || !q.stem || Object.keys(q.options || {}).length < 2);
+      if (bad.length) return toast(`还有 ${bad.length} 道题缺题干/选项/答案，补全后再入库`, 'err');
+      const r = await INVOKE('import:commit', { questions: pending, onDuplicate: 'skip' });
+      if (!r.ok) return toast(r.error, 'err');
+      const groups = [...new Set(pending.map((q) => q.groupName).filter(Boolean))];
+      const msg = `已入库 ${r.created} 道${r.skipped ? `，跳过重复 ${r.skipped} 道` : ''}${r.failed ? `，失败 ${r.failed} 道` : ''}`
+        + (groups.length ? `，归入「${groups.join('、')}」` : '');
+      toast(msg, r.failed ? 'err' : 'okc');
+      pending = []; images = []; renderThumbs();
+      $('#reviewArea').innerHTML = `<div class="card"><div class="okc">${esc(msg)}</div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" id="goPractice">去今日练习</button>
+          <button class="btn ghost" id="goGroups">看各单元情况</button>
+        </div></div>`;
+      $('#goPractice').onclick = () => go('today');
+      $('#goGroups').onclick = () => go('groups');
+    };
+    $('#dropAll').onclick = () => { pending = []; $('#reviewArea').innerHTML = ''; };
+  }
+
+  function renderQList() {
+    $('#qlist').innerHTML = pending.map((q, i) => `
+      <div class="qitem" data-i="${i}">
+        <div class="row" style="justify-content:space-between;margin-bottom:8px">
+          <span class="row" style="gap:8px">
+            <input type="checkbox" class="qpick" data-i="${i}" style="width:auto" title="勾选后可批量删除" />
+            <b>第 ${i + 1} 题${q.number ? `（原题号 ${q.number}）` : ''}</b>
+          </span>
+          <span class="row" style="gap:6px">
+            ${q.confidence !== null && q.confidence !== undefined ? `<span class="muted" style="font-size:12px">识别信心 ${(q.confidence * 100).toFixed(0)}%</span>` : ''}
+            <button class="btn danger" data-del="${i}" style="padding:3px 9px;font-size:12px">删除这道</button>
+          </span>
+        </div>
+        ${q.issues && q.issues.length ? `<div class="warnbox" style="margin-bottom:8px">${q.issues.map(esc).join('<br>')}</div>` : ''}
+        <label class="fld"><span>题干</span><textarea data-f="stem">${esc(q.stem)}</textarea></label>
+        <div class="grid2">
+          ${['A', 'B', 'C', 'D'].map((L) => `
+            <label class="fld" style="margin-bottom:8px"><span>选项 ${L}</span>
+              <input type="text" data-f="opt${L}" value="${esc(q.options?.[L] || '')}" /></label>`).join('')}
+        </div>
+        <div class="row">
+          <label class="fld" style="flex:0 0 120px"><span>正确答案</span>
+            <select data-f="answer">
+              <option value="">请选择</option>
+              ${['A', 'B', 'C', 'D', 'E', 'F'].map((L) => `<option value="${L}" ${q.answer === L ? 'selected' : ''}>${L}</option>`).join('')}
+            </select></label>
+          <label class="fld" style="flex:1;min-width:180px"><span>知识点（用 、 分隔）</span>
+            <input type="text" data-f="kp" value="${esc((q.knowledgePoints || []).join('、'))}" /></label>
+          <label class="fld" style="flex:0 0 110px"><span>难度</span>
+            <select data-f="difficulty">
+              ${['easy', 'medium', 'hard'].map((d) => `<option value="${d}" ${q.difficulty === d ? 'selected' : ''}>${{ easy: '简单', medium: '中等', hard: '困难' }[d]}</option>`).join('')}
+            </select></label>
+        </div>
+        <label class="fld" style="margin-bottom:0"><span>解析</span><textarea data-f="explanation" style="min-height:46px">${esc(q.explanation || '')}</textarea></label>
+        <label class="fld" style="margin:8px 0 0"><span>分组（可单题调整）</span>
+          <input type="text" data-f="group" list="groupOptions" value="${esc(q.groupName || '')}" placeholder="不填则不分组" /></label>
+      </div>`).join('');
+
+    $('#qlist').querySelectorAll('[data-del]').forEach((b) => {
+      b.onclick = () => {
+        collect();
+        pending.splice(Number(b.dataset.del), 1);
+        if (pending.length === 0) {
+          $('#reviewArea').innerHTML = '<div class="card"><div class="muted">待入库的题目已全部删除。</div></div>';
+          return;
+        }
+        renderReview([]);
+      };
+    });
+    // 勾选状态变化时更新"已选中 N 道"与批量删除按钮
+    $('#qlist').querySelectorAll('.qpick').forEach((c) => {
+      c.onchange = () => { if (window.__updatePick) window.__updatePick(); };
+    });
+    if (window.__updatePick) window.__updatePick();
+  }
+
+  /** 把界面上的编辑结果写回 pending（入库前必调，否则用户的修改会丢）。 */
+  function collect() {
+    const boxes = $('#qlist')?.querySelectorAll('.qitem') || [];
+    boxes.forEach((box) => {
+      const q = pending[Number(box.dataset.i)];
+      if (!q) return;
+      q.stem = box.querySelector('[data-f=stem]').value.trim();
+      q.options = {};
+      for (const L of ['A', 'B', 'C', 'D']) {
+        const v = box.querySelector(`[data-f=opt${L}]`).value.trim();
+        if (v) q.options[L] = v.replace(new RegExp(`^${L}\\s*[.、)．]\\s*`, 'i'), '');
+      }
+      q.answer = box.querySelector('[data-f=answer]').value;
+      q.groupName = (box.querySelector('[data-f=group]')?.value || '').trim();
+      q.knowledgePoints = box.querySelector('[data-f=kp]').value.split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean);
+      q.difficulty = box.querySelector('[data-f=difficulty]').value;
+      q.explanation = box.querySelector('[data-f=explanation]').value.trim();
+    });
+  }
+};
+
+/* ---------------------------- 选图工具（两种外壳通用） ---------------------------- */
+/** 把 File 转成 {name, mime, base64}（base64 不含 data: 前缀）。 */
+async function filesToBase64(files) {
+  const out = [];
+  for (const f of files) {
+    if (!f || !f.type || !f.type.startsWith('image/')) continue;
+    const dataUrl = await toB64(f);
+    out.push({ name: f.name, mime: f.type, base64: String(dataUrl).split(',')[1] });
+  }
+  return out;
+}
+
+/**
+ * 选图。优先用宿主能力（window.dsh.pickImage）；
+ * 没有时退化为页面内的隐藏 file input。两条路返回同一种结构。
+ */
+async function pickImages() {
+  if (window.dsh && window.dsh.pickImage) {
+    try {
+      const r = await window.dsh.pickImage();
+      if (r && r.ok) return r.files || [];
+      if (r && r.error) toast(r.error, 'err');
+      return [];
+    } catch (e) {
+      toast(`选图失败：${e.message}`, 'err');
+      return [];
+    }
+  }
+  return new Promise((resolve) => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.multiple = true;
+    inp.onchange = async () => resolve(await filesToBase64([...inp.files]));
+    inp.oncancel = () => resolve([]);
+    inp.click();
+  });
+}
+
+
+function toB64(file) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(file);
+  });
+}
+
+/* ---------------------------- 题库管理 ---------------------------- */
+screens.library = async () => {
+  const main = $('#main');
+  let filter = '';
+  let groupFilter = '';
+  main.innerHTML = `<h1>题库管理</h1><div class="sub" id="libSub"></div>
+    <div class="card">
+      <div class="row">
+        <input type="text" id="search" placeholder="搜索题干或选项…" style="flex:1;min-width:200px" />
+        <select id="groupFilter" style="flex:0 0 190px"><option value="">全部分组</option></select>
+        <button class="btn ghost" id="reload">刷新</button>
+        <button class="btn" id="autoTag">给没标注的题自动补知识点</button>
+      </div>
+      <div class="hintbox" style="margin-top:10px">
+        知识点决定了「掌握情况」里能不能看出你的薄弱项。录入时会自动标一次；
+        这里是给老题目补标（配置了文本模型会顺便让模型补充更贴切的考点名称）。
+      </div>
+    </div>
+    <div class="card" id="batchCard" style="display:none">
+      <h2>批量操作</h2>
+      <div class="row">
+        <span class="muted" id="selInfo" style="font-size:12.5px"></span>
+        <select id="batchGroupPick" style="flex:0 0 200px"></select>
+        <button class="btn" id="applyGroup">归入所选分组</button>
+        <button class="btn ghost" id="clearGroup">移出分组</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn danger" id="archivePicked">删除选中的题</button>
+        <button class="btn danger" id="purgePicked">彻底删除（不可恢复）</button>
+        <span class="muted" style="font-size:12px">默认「删除」只是移入回收站，可恢复；「彻底删除」会连同作答历史一起抹掉。</span>
+      </div>
+    </div>
+    <div class="card"><div class="qlist" id="libList"></div></div>`;
+
+  const loadGroups = async () => {
+    const r = await INVOKE('groups:list');
+    if (!r.ok) return;
+    const opts = (r.groups || []).map((g) => `<option value="${g.id}">${esc(g.name)}（${g.total} 题）</option>`).join('');
+    $('#groupFilter').innerHTML = `<option value="">全部分组</option>${opts}<option value="__none__">未分组（${r.ungrouped}）</option>`;
+    $('#batchGroupPick').innerHTML = `<option value="">选择目标分组…</option>${opts}`;
+  };
+
+  async function load() {
+    const payload = { search: filter, limit: 500 };
+    if (groupFilter === '__none__') payload.groupId = null;
+    else if (groupFilter) payload.groupId = Number(groupFilter);
+    const r = await INVOKE('questions:list', payload);
+    if (!r.ok) return toast(r.error, 'err');
+    $('#libSub').textContent = `共 ${r.questions.length} 道（最多显示 500 道）`;
+    if (!r.questions.length) {
+      $('#libList').innerHTML = '<div class="empty">没有符合条件的题目。</div>';
+      $('#batchCard').style.display = 'none';
+      return;
+    }
+    $('#libList').innerHTML = r.questions.map((q) => `
+      <div class="qitem">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div class="st" style="flex:1">${esc(q.stem)}</div>
+          <label class="row" style="gap:5px;flex:0 0 auto;color:var(--muted);font-size:12px">
+            <input type="checkbox" class="qpick" value="${q.id}" style="width:auto" /> 选中
+          </label>
+          <button class="btn danger" data-delq="${q.id}" style="padding:2px 9px;font-size:11.5px;flex:0 0 auto">删除</button>
+        </div>
+        <div class="row" style="gap:14px;flex-wrap:wrap">
+          ${Object.entries(q.options).map(([k, v]) => `<span class="muted" style="font-size:12.5px">${k}. ${esc(v)}</span>`).join('')}
+        </div>
+        <div class="meta" style="margin-top:6px">
+          ${q.groupName ? `<span class="chip">${esc(q.groupName)}</span>` : '<span class="muted" style="font-size:11.5px">未分组</span>'}
+          答案 <b class="okc">${esc(q.answer)}</b>｜
+          ${(q.knowledgePoints || []).map((k) => `<span class="kp">${esc(k)}</span>`).join('') || '<span class="muted">未标注知识点</span>'}
+          ｜${esc(srsText(q))}
+        </div>
+        ${q.explanation ? `<div class="meta" style="margin-top:4px">解析：${esc(q.explanation)}</div>` : ''}
+      </div>`).join('');
+    updateSel();
+  }
+
+  const picked = () => [...document.querySelectorAll('.qpick:checked')].map((c) => Number(c.value));
+  function updateSel() {
+    const n = picked().length;
+    $('#batchCard').style.display = n > 0 ? '' : 'none';
+    $('#selInfo').textContent = n > 0 ? `已选中 ${n} 道题` : '';
+  }
+  $('#libList').addEventListener('change', (e) => { if (e.target.classList.contains('qpick')) updateSel(); });
+  // 单题删除：走同一套"移入回收站"逻辑，避免两种删除语义不一致
+  $('#libList').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-delq]');
+    if (!btn) return;
+    const id = Number(btn.dataset.delq);
+    if (!confirm('把这道题移入回收站？\n\n它会从题库和练习中消失，但数据仍在，可在「回收站」恢复。')) return;
+    const r = await INVOKE('questions:bulkDelete', { ids: [id], mode: 'archive' });
+    toast(r.ok ? r.message : r.error, r.ok ? 'okc' : 'err');
+    if (r.ok) { await loadGroups(); load(); }
+  });
+
+  $('#applyGroup').onclick = async () => {
+    const ids = picked();
+    const gid = $('#batchGroupPick').value;
+    if (!ids.length) return toast('先勾选题目', 'err');
+    if (!gid) return toast('先选择目标分组（没有就先到「单元分组」里创建一个）', 'err');
+    const r = await INVOKE('groups:assign', { questionIds: ids, groupId: Number(gid) });
+    toast(r.ok ? `已把 ${r.updated} 道题归入分组` : r.error, r.ok ? 'okc' : 'err');
+    if (r.ok) { await loadGroups(); load(); }
+  };
+  $('#clearGroup').onclick = async () => {
+    const ids = picked();
+    if (!ids.length) return toast('先勾选题目', 'err');
+    const r = await INVOKE('groups:assign', { questionIds: ids, groupId: null });
+    toast(r.ok ? `已把 ${r.updated} 道题移出分组` : r.error, r.ok ? 'okc' : 'err');
+    if (r.ok) { await loadGroups(); load(); }
+  };
+
+  $('#archivePicked').onclick = async () => {
+    const ids = picked();
+    if (!ids.length) return toast('先勾选题目', 'err');
+    if (!confirm(`把选中的 ${ids.length} 道题移入回收站？\n\n它们会从题库和练习中消失，但数据仍在，可以随时恢复。`)) return;
+    const r = await INVOKE('questions:bulkDelete', { ids, mode: 'archive' });
+    toast(r.ok ? r.message : r.error, r.ok ? 'okc' : 'err');
+    if (r.ok) { await loadGroups(); load(); }
+  };
+
+  $('#purgePicked').onclick = async () => {
+    const ids = picked();
+    if (!ids.length) return toast('先勾选题目', 'err');
+    // 先问影响范围，再让用户确认 —— 彻底删除不可恢复，必须说清代价
+    const imp = await INVOKE('questions:deleteImpact', { ids });
+    const it = imp.impact || {};
+    const warn = [
+      `确定要**彻底删除**选中的 ${ids.length} 道题？此操作不可恢复。`,
+      '',
+      it.attempts ? `· 会一并删除 ${it.attempts} 条作答记录` : '· 这些题还没有作答记录',
+      it.sessions ? `· 涉及 ${it.sessions} 次练习的明细` : '',
+      it.answered ? `· 其中 ${it.answered} 道已经练过（复习进度会一起丢失）` : '',
+      '',
+      '如果只是想从题库里去掉，建议点「删除选中的题」（可恢复）。',
+    ].filter(Boolean).join('\n');
+    if (!confirm(warn)) return;
+    const r = await INVOKE('questions:bulkDelete', { ids, mode: 'purge' });
+    toast(r.ok ? r.message : r.error, r.ok ? 'okc' : 'err');
+    if (r.ok) { await loadGroups(); load(); }
+  };
+
+  $('#search').oninput = (e) => { filter = e.target.value.trim(); clearTimeout(window.__t); window.__t = setTimeout(load, 250); };
+  $('#groupFilter').onchange = (e) => { groupFilter = e.target.value; load(); };
+  $('#reload').onclick = load;
+  $('#autoTag').onclick = async () => {
+    $('#autoTag').disabled = true;
+    $('#autoTag').textContent = '正在识别…';
+    const r = await INVOKE('knowledge:tagBank', { limit: 300, overwrite: false });
+    $('#autoTag').disabled = false;
+    $('#autoTag').textContent = '给没标注的题自动补知识点';
+    if (!r.ok) return toast(r.error, 'err');
+    toast(r.updated ? `已补标 ${r.updated} 道题${r.usedModel ? '（含模型补充）' : '（本地规则）'}` : (r.message || '没有需要补标的题'), 'okc');
+    if (r.notes?.length) console.log('补标说明:', r.notes);
+    load();
+  };
+  await loadGroups();
+  load();
+};
+
+function srsText(q) {
+  const s = q.state || {};
+  const days = s.dueAt ? Math.round((s.dueAt - Date.now()) / 86400000) : null;
+  const m = Math.round((s.stability ? Math.min(s.stability / 10, 1) : 0) * 100);
+  const due = s.reps === 0 ? '未学过' : days <= 0 ? '待复习' : days === 1 ? '明天复习' : `${days} 天后复习`;
+  return `复习 ${s.reps || 0} 次｜错 ${s.lapses || 0} 次｜强度 ${m}%｜${due}`;
+}
+
+/* ---------------------------- 掌握情况 ---------------------------- */
+screens.stats = async () => {
+  const main = $('#main');
+  main.innerHTML = `<h1>掌握情况</h1><div class="sub">按知识点排序，最弱的在最前面。</div>
+    <div class="kpis" id="sKpis"></div>
+    <div class="card" style="margin-top:18px"><h2>知识点薄弱排行</h2><div id="kpTable"></div></div>
+    <div class="card"><h2>错题本</h2><div id="wrongBook"></div></div>`;
+
+  const r = await INVOKE('stats:overview');
+  if (!r.ok) return toast(r.error, 'err');
+  const k = r.counts;
+  $('#sKpis').innerHTML = [['题库总量', k.total], ['已学过', k.learned], ['待复习', k.due], ['未学过', k.new]]
+    .map(([l, v]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join('');
+
+  $('#kpTable').innerHTML = r.knowledge.length ? `<table>
+    <thead><tr><th>知识点</th><th>题量</th><th>平均掌握</th><th>错题次数</th><th>待复习</th></tr></thead>
+    <tbody>${r.knowledge.map((it) => {
+      const pct = Math.round(it.avgMastery * 100);
+      const cls = pct >= 70 ? '' : pct >= 40 ? 'mid' : 'low';
+      return `<tr><td>${esc(it.name)}</td><td>${it.total}</td>
+        <td><span class="mb" style="width:100px"><i class="${cls}" style="width:${pct}%"></i></span> ${pct}%</td>
+        <td>${it.lapses}</td><td>${it.due}</td></tr>`;
+    }).join('')}</tbody></table>` : '<div class="muted">还没有数据。</div>';
+
+  const wb = await INVOKE('stats:wrongBook', { limit: 100 });
+  $('#wrongBook').innerHTML = wb.ok && wb.items.length ? `<table>
+    <thead><tr><th>题干</th><th>答案</th><th>错了几次</th><th>知识点</th></tr></thead>
+    <tbody>${wb.items.map((q) => `<tr>
+      <td>${esc(q.stem.slice(0, 60))}${q.stem.length > 60 ? '…' : ''}</td>
+      <td class="okc">${esc(q.answer)}</td><td>${q.wrongCount}</td>
+      <td>${(q.knowledgePoints || []).map((x) => `<span class="kp weak">${esc(x)}</span>`).join('')}</td>
+    </tr>`).join('')}</tbody></table>` : '<div class="muted">还没有错题记录。练几道题就有了。</div>';
+};
+
+/* ---------------------------- 设置 ---------------------------- */
+screens.settings = async () => {
+  const main = $('#main');
+  const r = await INVOKE('settings:get');
+  if (!r.ok) return toast(r.error, 'err');
+  const s = r.settings;
+  const dir = await INVOKE('settings:dataDir');
+
+  main.innerHTML = `<h1>设置</h1><div class="sub">题库与图片都只存在本机，不会上传。只有读图时会把图片发给所选模型服务。</div>
+
+    <div class="card">
+      <h2>练习设置</h2>
+      <div class="grid2">
+        <label class="fld"><span>每天新题上限</span>
+          <input type="number" id="newLimit" min="0" max="200" value="${s.newLimit}" /></label>
+        <label class="fld"><span>单次练习最多题数</span>
+          <input type="number" id="maxTotal" min="10" max="500" value="${s.maxTotal}" /></label>
+        <label class="fld"><span>目标记忆保持率（越高=复习越频繁）</span>
+          <select id="targetRetention">
+            ${[[0.8, '80%（轻松）'], [0.85, '85%'], [0.9, '90%（推荐，接近墨墨）'], [0.95, '95%（很密集）']]
+              .map(([v, t]) => `<option value="${v}" ${Number(s.targetRetention) === v ? 'selected' : ''}>${t}</option>`).join('')}
+          </select></label>
+        <label class="fld"><span>选项顺序</span>
+          <select id="shuffleOptions">
+            <option value="true" ${s.shuffleOptions ? 'selected' : ''}>每次练习打乱（推荐）</option>
+            <option value="false" ${!s.shuffleOptions ? 'selected' : ''}>固定顺序</option>
+          </select></label>
+        <label class="fld"><span>题目顺序</span>
+          <select id="shuffleOrder">
+            <option value="true" ${s.shuffleOrder ? 'selected' : ''}>每次练习打乱（推荐）</option>
+            <option value="false" ${!s.shuffleOrder ? 'selected' : ''}>按录入顺序（按单元刷题时用）</option>
+          </select></label>
+      </div>
+      <div class="hintbox" style="margin-bottom:12px">
+        两个都打乱时：同一道题这次正确答案是 A，下次可能是 C；题目的出场顺序也每次都不同。
+        优先级不受影响 —— 该复习的题永远排在没学过的新题前面。
+      </div>
+      <button class="btn" id="savePractice">保存练习设置</button>
+    </div>
+
+    <div class="card">
+      <h2>读图与解析模型</h2>
+      <div class="sub" style="margin-bottom:12px">拍照录入需要一个<b>能读图</b>的模型。DeepSeek 目前不能读图，所以读图要另选服务商。</div>
+      <label class="fld"><span>服务商预置（点击套用）</span>
+        <div class="row" id="presets"></div></label>
+      <div class="grid2">
+        <label class="fld"><span>服务地址 baseUrl</span><input type="text" id="baseUrl" value="${esc(s.baseUrl)}" /></label>
+        <label class="fld"><span>文本模型（判断答案/知识点用）</span><input type="text" id="model" value="${esc(s.model)}" /></label>
+        <label class="fld"><span>读图模型（留空则不能拍照录入）</span><input type="text" id="visionModel" value="${esc(s.visionModel)}" /></label>
+        <label class="fld"><span>API Key ${s.hasApiKey ? `（已存：${esc(s.apiKeyMasked)}）` : '（未配置）'}</span>
+          <input type="password" id="apiKey" placeholder="${s.hasApiKey ? '留空则不修改' : 'sk-...'}" /></label>
+      </div>
+      <div class="row">
+        <button class="btn" id="saveModel">保存模型设置</button>
+        <button class="btn ghost" id="testText">测试文本模型</button>
+        <button class="btn ghost" id="testVision">测试读图模型</button>
+      </div>
+      <div id="testOut" class="muted" style="margin-top:10px;font-size:12.5px"></div>
+    </div>
+
+    <div class="card">
+      <h2>数据位置</h2>
+      <div class="muted" style="font-size:12.5px">题库数据库与图片都在：<br><code>${esc(dir.dataDir || '')}</code></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn ghost" id="openDir">打开数据目录</button>
+        <span class="muted" style="font-size:12.5px">备份就是拷走这个目录。</span>
+      </div>
+    </div>`;
+
+  $('#presets').innerHTML = Object.entries(s.presets).map(([k, p]) =>
+    `<button class="btn ghost" data-p="${k}" style="font-size:12.5px">${esc(p.label)}</button>`).join('');
+  $('#presets').querySelectorAll('[data-p]').forEach((b) => {
+    b.onclick = () => {
+      const p = s.presets[b.dataset.p];
+      $('#baseUrl').value = p.baseUrl;
+      $('#model').value = p.model;
+      $('#visionModel').value = p.visionModel || '';
+      toast(`已套用 ${p.label}，别忘了填 API Key 并保存`, 'okc');
+    };
+  });
+
+  $('#savePractice').onclick = async () => {
+    const rr = await INVOKE('settings:set', {
+      practice: {
+        newLimit: Number($('#newLimit').value),
+        maxTotal: Number($('#maxTotal').value),
+        targetRetention: Number($('#targetRetention').value),
+        shuffleOptions: $('#shuffleOptions').value === 'true',
+        shuffleOrder: $('#shuffleOrder').value === 'true',
+      },
+    });
+    toast(rr.ok ? '已保存（下次开始练习时生效）' : rr.error, rr.ok ? 'okc' : 'err');
+  };
+
+  $('#saveModel').onclick = async () => {
+    const patch = {
+      baseUrl: $('#baseUrl').value.trim(),
+      model: $('#model').value.trim(),
+      visionModel: $('#visionModel').value.trim(),
+    };
+    const key = $('#apiKey').value.trim();
+    if (key) patch.apiKey = key;
+    const rr = await INVOKE('settings:set', patch);
+    toast(rr.ok ? '已保存' : rr.error, rr.ok ? 'okc' : 'err');
+  };
+
+  const doTest = async (vision) => {
+    $('#testOut').innerHTML = '<span class="spin"></span> 正在测试…';
+    const rr = await INVOKE('settings:test', { vision });
+    const t = rr.result;
+    $('#testOut').innerHTML = t.ok
+      ? `<span class="okc">连接正常</span>｜模型 ${esc(t.model)}｜耗时 ${t.ms}ms｜回复：${esc(t.reply)}`
+      : `<span class="crit">连接失败</span>｜${esc(t.error)}`;
+  };
+  $('#testText').onclick = () => doTest(false);
+  $('#testVision').onclick = () => doTest(true);
+  $('#openDir').onclick = async () => {
+    if (window.dsh?.openDataDir) await window.dsh.openDataDir();
+    else toast('数据目录：' + dir.dataDir);
+  };
+};
+
+/* ---------------------------- 讲评：第二次做错时展开 ---------------------------- *
+ * 用户要求：第二次做错时，把知识点展示出来，并告诉我前两次选了什么。
+ * 材料来自 teach:mistake —— 它按题目累计错误次数统计，跨会话都算数。
+ * ---------------------------------------------------------------------------- */
+async function showTeachDock(questionId, sessionId) {
+  const old = $('#teachModal');
+  if (old) old.remove();
+
+  const t = await INVOKE('teach:mistake', { questionId, sessionId });
+  if (!t.ok) return toast(t.error, 'err');
+  const q = t.question;
+
+  const historyHtml = t.history.length
+    ? t.history.slice(0, 6).map((h) => `
+        <div class="hrow ${h.correct ? 'ok' : ''}">
+          <span class="when">${esc(h.day || '')} 第${h.round}轮</span>
+          <span class="what">你选了 <b class="${h.correct ? 'okc' : 'crit'}">${esc(h.picked || '未作答')}</b>${h.pickedText ? ` · ${esc(h.pickedText)}` : ''}</span>
+          <span class="mark">${h.correct ? '<span class="okc">对</span>' : '<span class="crit">错</span>'}</span>
+        </div>`).join('')
+    : '<div class="muted">还没有作答记录。</div>';
+
+  const wrongList = t.wrongAttempts.length
+    ? t.wrongAttempts.map((w) => `「${esc(w.picked || '未作答')}${w.pickedText ? ' ' + esc(w.pickedText) : ''}」`).join('、')
+    : '—';
+
+  const modal = document.createElement('div');
+  modal.id = 'teachModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:#000a;display:grid;place-items:center;z-index:200;padding:24px';
+  modal.innerHTML = `
+    <div class="card" style="max-width:660px;width:100%;max-height:86vh;overflow:auto;margin:0">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2 style="margin:0">这道题你已经错 ${t.wrongCount} 次了</h2>
+        <button class="btn ghost" id="closeTeach" style="padding:4px 12px">关闭</button>
+      </div>
+      <div class="stem" style="font-size:16px;margin-bottom:12px">${esc(q.stem)}</div>
+      <div class="opts" style="gap:7px">${Object.entries(q.options).map(([L, v]) => `
+        <div class="opt" style="padding:9px 12px;font-size:14px;${L === q.answer ? 'border-color:var(--ok);background:#16281f' : ''}">
+          <span class="k" ${L === q.answer ? 'style="background:var(--ok);color:#08231a"' : ''}>${L}</span>
+          <span>${esc(v)}</span>
+          ${L === q.answer ? '<span class="tag okc">正确答案</span>' : ''}
+        </div>`).join('')}</div>
+
+      <div class="teach">
+        <h4>这个考点是</h4>
+        <div>${q.knowledgePoints.length
+          ? q.knowledgePoints.map((k) => `<span class="chip">${esc(k)}</span>`).join('')
+          : '<span class="muted">这道题还没标注知识点，可以到题库管理里补一下。</span>'}</div>
+      </div>
+
+      <div class="teach">
+        <h4>你前几次分别选了</h4>
+        <div style="margin-bottom:8px">${wrongList}</div>
+        <div class="history">${historyHtml}</div>
+        ${t.wrongAttempts.length >= 2
+          ? `<div class="muted" style="font-size:12.5px;margin-top:6px">
+               注意：你两次选的都不是 <b class="okc">${esc(q.answer)}</b>，说明不是手滑，是这个考点还没掌握。
+             </div>`
+          : ''}
+      </div>
+
+      ${q.explanation ? `<div class="teach"><h4>解析</h4><div>${esc(q.explanation)}</div></div>` : ''}
+
+      <div id="glossArea"></div>
+
+      <div class="row" style="margin-top:14px">
+        <button class="btn" id="askAboutIt">就这道题提问</button>
+        <button class="btn ghost" id="copyForHost">复制内容发给我</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(modal);
+  $('#closeTeach').onclick = () => modal.remove();
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+  // 词汇题：逐项给出释义（含熟词生义）与本题语境下的含义
+  (async () => {
+    const area = $('#glossArea');
+    if (!area) return;
+    area.innerHTML = '<div class="teach"><span class="spin"></span> 正在整理各选项释义…</div>';
+    const r = await INVOKE('knowledge:explainWords', { questionId: q.id });
+    if (!area.isConnected) return;
+    const g = r.gloss || {};
+    const opts = q.options || {};
+    if (!r.usedModel && g.needsModel) {
+      area.innerHTML = `<div class="teach">
+        <h4>选项释义</h4>
+        <div class="muted" style="font-size:12.5px;margin-bottom:8px">
+          这是一道词义题，需要逐项释义。配置文本模型后这里会自动给出每个选项的意思（含熟词生义）；
+          现在可以点下面的「就这道题提问」或「复制内容发给我」，我来逐个讲。
+        </div>
+      </div>`;
+      return;
+    }
+    const rows = Object.keys(opts).map((L) => {
+      const it = g.options?.[L] || {};
+      const isRight = L === q.answer;
+      return `<div class="hrow ${isRight ? 'ok' : ''}" style="align-items:flex-start">
+        <span class="when" style="min-width:22px">${L}</span>
+        <span class="what">
+          <b>${esc(opts[L])}</b>
+          ${it.gloss ? ` — ${esc(it.gloss)}` : ''}
+          ${it.here ? `<div class="muted" style="font-size:12.5px">本题语境：${esc(it.here)}</div>` : ''}
+          ${it.note ? `<div class="muted" style="font-size:12.5px">提示：${esc(it.note)}</div>` : ''}
+        </span>
+        ${isRight ? '<span class="mark okc">正确</span>' : ''}
+      </div>`;
+    }).join('');
+    area.innerHTML = `<div class="teach">
+      <h4>选项释义${r.usedModel ? '' : '（未配置模型，仅供参考）'}</h4>
+      ${g.sentence ? `<div style="margin-bottom:8px">${esc(g.sentence)}</div>` : ''}
+      <div class="history">${rows}</div>
+      ${r.note ? `<div class="muted" style="font-size:12.5px">${esc(r.note)}</div>` : ''}
+    </div>`;
+  })();
+
+  $('#askAboutIt').onclick = () => {
+    modal.remove();
+    openChatPanel({ questionId: q.id, title: q.stem.slice(0, 40) });
+  };
+
+  $('#copyForHost').onclick = async () => {
+    const lines = [
+      '这道英语单选题我反复做错，帮我讲讲：',
+      '',
+      `题干：${q.stem}`,
+      ...Object.entries(q.options).map(([L, v]) => `${L}. ${v}`),
+      `正确答案：${q.answer}. ${q.answerText}`,
+      q.knowledgePoints.length ? `考点：${q.knowledgePoints.join('、')}` : '',
+      t.wrongAttempts.length ? `我错选的答案：${wrongList}` : '',
+      `做错次数：${t.wrongCount}`,
+    ].filter(Boolean).join('\n');
+    await copyText(lines);
+  };
+}
+
+/** 复制到剪贴板（带降级方案）。 */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('已复制，粘贴给我就行', 'okc');
+  } catch {
+    // 剪贴板 API 在非安全上下文可能不可用，退化为手动选择
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    ta.remove();
+    toast(ok ? '已复制，粘贴给我就行' : '复制失败，请手动选中文本复制', ok ? 'okc' : 'err');
+  }
+}
+
+/* ---------------------------- 问答（对话窗口） ---------------------------- */
+function openChatPanel(opts = {}) {
+  const dock = document.createElement('div');
+  dock.id = 'chatPanel';
+  dock.style.cssText = 'position:fixed;right:0;top:0;bottom:0;width:430px;background:var(--panel);'
+    + 'border-left:1px solid var(--line);z-index:190;display:flex;flex-direction:column;box-shadow:-12px 0 30px #0007';
+  dock.innerHTML = `
+    <div class="chathead">
+      <b style="font-size:13.5px">就这道题提问</b>
+      <span class="ctx" id="panelCtx"></span>
+      <button class="btn ghost" id="closePanel" style="padding:3px 10px;font-size:12px">关闭</button>
+    </div>
+    <div class="msgs" id="panelMsgs"></div>
+    <div class="chatfoot">
+      <textarea id="panelInput" placeholder="例如：为什么不能选 A？这个考点怎么记？"></textarea>
+      <button class="btn" id="panelSend">发送</button>
+    </div>`;
+  document.body.appendChild(dock);
+
+  let threadId = null;
+  let questionId = opts.questionId || null;
+  let busy = false;
+
+  const input = $('#panelInput', dock);
+  const msgs = $('#panelMsgs', dock);
+  $('#panelCtx', dock).textContent = opts.title || (questionId ? `题目 #${questionId}` : '通用提问');
+  setTimeout(() => input.focus(), 100);
+
+  const addBubble = (role, text, isError) => {
+    const el = document.createElement('div');
+    el.className = `msg ${role}${isError ? ' error' : ''}`;
+    el.textContent = text;
+    msgs.appendChild(el);
+    msgs.scrollTop = msgs.scrollHeight;
+    return el;
+  };
+
+  const send = async () => {
+    const text = input.value.trim();
+    if (!text || busy) return;
+    busy = true;
+    input.value = '';
+    addBubble('user', text);
+    const pending = addBubble('assistant', '…');
+    const r = await INVOKE('chat:ask', { threadId, questionId, message: text });
+    pending.remove();
+    if (r.ok) {
+      threadId = r.threadId;
+      addBubble('assistant', r.reply);
+    } else {
+      if (r.threadId) threadId = r.threadId;
+      addBubble('assistant', r.error || '回答失败', true);
+      // 没配模型时给出可复制的上下文，方便贴给别人
+      if (r.code === 'NO_MODEL' && r.context) {
+        const btn = document.createElement('button');
+        btn.className = 'btn ghost';
+        btn.style.cssText = 'align-self:flex-start;font-size:12.5px';
+        btn.textContent = '复制这道题的内容';
+        btn.onclick = () => copyText(`${r.context}\n\n我的问题：${text}`);
+        msgs.appendChild(btn);
+        msgs.scrollTop = msgs.scrollHeight;
+      }
+    }
+    busy = false;
+    input.focus();
+  };
+
+  $('#panelSend', dock).onclick = send;
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+  $('#closePanel', dock).onclick = () => dock.remove();
+
+  return { close: () => dock.remove() };
+}
+
+screens.chat = async () => {
+  const main = $('#main');
+  let threadId = null;
+  let questionId = null;
+  let busy = false;
+
+  main.innerHTML = `<h1>问答</h1>
+    <div class="sub">可以就某道题提问，也可以泛问语法问题。问某道题时会自动带上题目、考点和你的作答记录，所以不用把题目再抄一遍。</div>
+    <div class="chatwrap">
+      <div class="chatlist" id="threads"></div>
+      <div class="chatmain">
+        <div class="chathead">
+          <b style="font-size:13.5px" id="chatTitle">新对话</b>
+          <span class="ctx" id="chatCtx"></span>
+          <button class="btn ghost" id="newThread" style="padding:3px 10px;font-size:12px">新对话</button>
+          <button class="btn ghost" id="pickQuestion" style="padding:3px 10px;font-size:12px">选一道题</button>
+        </div>
+        <div class="msgs" id="msgs"></div>
+        <div class="chatfoot">
+          <textarea id="chatInput" placeholder="输入问题，回车发送（Shift+回车换行）"></textarea>
+          <button class="btn" id="sendBtn">发送</button>
+        </div>
+      </div>
+    </div>`;
+
+  const msgsEl = $('#msgs');
+  const input = $('#chatInput');
+
+  const addBubble = (role, text, isError) => {
+    const el = document.createElement('div');
+    el.className = `msg ${role}${isError ? ' error' : ''}`;
+    el.textContent = text;
+    msgsEl.appendChild(el);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+    return el;
+  };
+
+  const setContext = (q) => {
+    questionId = q ? q.id : null;
+    $('#chatCtx').textContent = q ? `关于：${q.stem.slice(0, 34)}…` : '';
+  };
+
+  const loadThreads = async () => {
+    const r = await INVOKE('chat:threads', {});
+    if (!r.ok) return;
+    $('#threads').innerHTML = r.threads.length
+      ? r.threads.map((t) => `<div class="item ${t.id === threadId ? 'on' : ''}" data-t="${t.id}">
+          <div>${esc(t.title || '对话 #' + t.id)}</div>
+          <div class="sub">${t.messageCount} 条 · ${new Date(t.updatedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+        </div>`).join('')
+      : '<div class="item muted">还没有对话</div>';
+    $('#threads').querySelectorAll('[data-t]').forEach((el) => {
+      el.onclick = () => openThread(Number(el.dataset.t));
+    });
+  };
+
+  const openThread = async (id) => {
+    const r = await INVOKE('chat:messages', { threadId: id });
+    if (!r.ok) return toast(r.error, 'err');
+    threadId = id;
+    questionId = r.thread.questionId || null;
+    $('#chatTitle').textContent = r.thread.title || `对话 #${id}`;
+    $('#chatCtx').textContent = questionId ? `关于题目 #${questionId}` : '';
+    msgsEl.innerHTML = '';
+    for (const m of r.messages) addBubble(m.role === 'assistant' ? 'assistant' : 'user', m.content, m.error);
+    loadThreads();
+  };
+
+  const send = async () => {
+    const text = input.value.trim();
+    if (!text || busy) return;
+    busy = true;
+    input.value = '';
+    addBubble('user', text);
+    const pending = addBubble('assistant', '…');
+    const r = await INVOKE('chat:ask', { threadId, questionId, message: text });
+    pending.remove();
+    if (r.ok) {
+      threadId = r.threadId;
+      addBubble('assistant', r.reply);
+    } else {
+      if (r.threadId) threadId = r.threadId;
+      addBubble('assistant', r.error || '回答失败', true);
+      if (r.code === 'NO_MODEL' && r.context) {
+        const btn = document.createElement('button');
+        btn.className = 'btn ghost';
+        btn.style.cssText = 'align-self:flex-start;font-size:12.5px';
+        btn.textContent = '复制这道题的内容';
+        btn.onclick = () => copyText(`${r.context}\n\n我的问题：${text}`);
+        msgsEl.appendChild(btn);
+      }
+    }
+    busy = false;
+    await loadThreads();
+    input.focus();
+  };
+
+  $('#sendBtn').onclick = send;
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+  $('#newThread').onclick = () => {
+    threadId = null;
+    questionId = null;
+    msgsEl.innerHTML = '';
+    $('#chatTitle').textContent = '新对话';
+    $('#chatCtx').textContent = '';
+    loadThreads();
+    input.focus();
+  };
+  $('#pickQuestion').onclick = async () => {
+    const list = await INVOKE('questions:list', { limit: 200 });
+    if (!list.ok) return toast(list.error, 'err');
+    if (!list.questions.length) return toast('题库还是空的', 'err');
+    const idx = await pickFromList(list.questions.map((q) => `${q.id}. ${q.stem.slice(0, 60)}`), '选一道题来提问');
+    if (idx === null) return;
+    const q = list.questions[idx];
+    threadId = null;
+    msgsEl.innerHTML = '';
+    $('#chatTitle').textContent = `题目 #${q.id}`;
+    setContext(q);
+    const t = await INVOKE('teach:mistake', { questionId: q.id });
+    if (t.ok) {
+      addBubble('assistant', `这道题的考点：${t.question.knowledgePoints.join('、') || '未标注'}\n正确答案：${t.question.answer}. ${t.question.answerText}\n你做错过 ${t.wrongCount} 次。\n\n有什么想问的？`);
+    }
+    loadThreads();
+    input.focus();
+  };
+
+  await loadThreads();
+  input.focus();
+};
+
+/** 简易选择列表（避免用 prompt 那种丑且不可控的交互）。 */
+function pickFromList(items, title) {
+  return new Promise((resolve) => {
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:#000a;display:grid;place-items:center;z-index:210;padding:24px';
+    modal.innerHTML = `<div class="card" style="max-width:620px;width:100%;max-height:80vh;overflow:auto;margin:0">
+      <h2>${esc(title)}</h2>
+      <div class="qlist">${items.map((t, i) => `<div class="qitem" data-i="${i}" style="cursor:pointer">${esc(t)}</div>`).join('')}</div>
+      <div class="row" style="margin-top:12px"><button class="btn ghost" id="cancelPick">取消</button></div>
+    </div>`;
+    document.body.appendChild(modal);
+    const done = (v) => { modal.remove(); resolve(v); };
+    modal.querySelectorAll('[data-i]').forEach((el) => (el.onclick = () => done(Number(el.dataset.i))));
+    $('#cancelPick', modal).onclick = () => done(null);
+    modal.onclick = (e) => { if (e.target === modal) done(null); };
+  });
+}
+
+/* ---------------------------- 单元分组 ---------------------------- */
+screens.groups = async () => {
+  const main = $('#main');
+
+  const load = async () => {
+    const r = await INVOKE('groups:list');
+    if (!r.ok) return toast(r.error, 'err');
+    const groups = r.groups || [];
+    const totalMastery = groups.filter((g) => g.total > 0);
+    const avgAll = totalMastery.length
+      ? totalMastery.reduce((a, g) => a + g.avgMastery * g.total, 0) / totalMastery.reduce((a, g) => a + g.total, 0)
+      : 0;
+
+    main.innerHTML = `<h1>单元分组</h1>
+      <div class="sub">按单元/章节归拢题目，看清每个单元的掌握情况。</div>
+
+      <div class="card">
+        <div class="row" style="align-items:flex-end">
+          <label class="fld" style="flex:1;min-width:200px;margin-bottom:0"><span>新建分组</span>
+            <input type="text" id="newGroupName" placeholder="例如 第一单元 / Unit 3 / 虚拟语气专项" /></label>
+          <label class="fld" style="flex:1;min-width:160px;margin-bottom:0"><span>备注（可选）</span>
+            <input type="text" id="newGroupNote" placeholder="例如 课本 P12-20" /></label>
+          <button class="btn" id="createGroup">创建</button>
+        </div>
+        ${r.ungrouped > 0 ? `<div class="warnbox" style="margin-top:12px">
+          还有 <b>${r.ungrouped}</b> 道题没有分组。可以在「题库管理」里批量归入，或在录入时直接指定分组。
+        </div>` : ''}
+      </div>
+
+      <div class="kpis" style="margin-bottom:16px">
+        <div class="kpi"><b>${groups.length}</b><span>分组数</span></div>
+        <div class="kpi"><b>${groups.reduce((a, g) => a + g.total, 0)}</b><span>已归类题数</span></div>
+        <div class="kpi"><b>${r.ungrouped}</b><span>未分组</span></div>
+        <div class="kpi"><b>${Math.round(avgAll * 100)}%</b><span>整体掌握度</span></div>
+      </div>
+
+      ${groups.length === 0
+        ? '<div class="card"><div class="empty">还没有分组。录入题目时填一个分组名就会自动创建。</div></div>'
+        : `<div class="card"><h2>各单元情况（掌握度低的排前面）</h2>
+            <div id="groupTable"></div></div>`}`;
+
+    if (groups.length) {
+      const sorted = [...groups].sort((a, b) => a.avgMastery - b.avgMastery);
+      $('#groupTable').innerHTML = `<table>
+        <thead><tr><th>分组</th><th>题量</th><th>已学</th><th>待复习</th><th>累计错</th><th>掌握度</th><th></th></tr></thead>
+        <tbody>${sorted.map((g) => {
+          const pct = Math.round(g.avgMastery * 100);
+          const cls = pct >= 70 ? '' : pct >= 40 ? 'mid' : 'low';
+          return `<tr>
+            <td><b>${esc(g.name)}</b>${g.note ? `<div class="muted" style="font-size:11.5px">${esc(g.note)}</div>` : ''}
+              ${g.topKnowledge.length ? `<div style="margin-top:3px">${g.topKnowledge.slice(0, 3).map((k) => `<span class="chip">${esc(k.name)}×${k.count}</span>`).join('')}</div>` : ''}</td>
+            <td>${g.total}</td>
+            <td>${g.learned}</td>
+            <td>${g.due}</td>
+            <td>${g.wrongTotal}</td>
+            <td><span class="mb" style="width:80px"><i class="${cls}" style="width:${pct}%"></i></span> ${pct}%</td>
+            <td class="row" style="gap:6px">
+              <button class="btn ghost" data-rename="${g.id}" style="padding:2px 9px;font-size:12px">改名</button>
+              <button class="btn danger" data-del="${g.id}" style="padding:2px 9px;font-size:12px">删除</button>
+            </td>
+          </tr>`;
+        }).join('')}</tbody></table>`;
+
+      $('#groupTable').querySelectorAll('[data-rename]').forEach((b) => {
+        b.onclick = async () => {
+          const g = groups.find((x) => x.id === Number(b.dataset.rename));
+          const input = await pickText(`把「${g.name}」改成：`, g.name);
+          if (input === null || input === g.name) return;
+          const rr = await INVOKE('groups:rename', { id: g.id, name: input });
+          toast(rr.ok ? '已改名' : rr.error, rr.ok ? 'okc' : 'err');
+          load();
+        };
+      });
+      $('#groupTable').querySelectorAll('[data-del]').forEach((b) => {
+        b.onclick = async () => {
+          const g = groups.find((x) => x.id === Number(b.dataset.del));
+          if (!confirm(`删除分组「${g.name}」？\n\n分组里的 ${g.total} 道题不会被删，只是变成"未分组"。`)) return;
+          const rr = await INVOKE('groups:delete', { id: g.id });
+          toast(rr.ok ? `已删除分组，${rr.ungrouped} 道题转为未分组` : rr.error, rr.ok ? 'okc' : 'err');
+          load();
+        };
+      });
+    }
+
+    $('#createGroup').onclick = async () => {
+      const name = $('#newGroupName').value.trim();
+      if (!name) return toast('先填分组名', 'err');
+      const rr = await INVOKE('groups:create', { name, note: $('#newGroupNote').value.trim() });
+      toast(rr.ok ? `已创建「${name}」` : rr.error, rr.ok ? 'okc' : 'err');
+      if (rr.ok) load();
+    };
+  };
+
+  await load();
+};
+
+/** 简易文本输入框（替代 prompt，样式一致且能校验）。 */
+function pickText(title, defaultValue = '') {
+  return new Promise((resolve) => {
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:#000a;display:grid;place-items:center;z-index:210;padding:24px';
+    modal.innerHTML = `<div class="card" style="max-width:420px;width:100%;margin:0">
+      <h2>${esc(title)}</h2>
+      <input type="text" id="pickTextInput" value="${esc(defaultValue)}" />
+      <div class="row" style="margin-top:14px">
+        <button class="btn" id="pickOk">确定</button>
+        <button class="btn ghost" id="pickCancel">取消</button>
+      </div>
+    </div>`;
+    document.body.appendChild(modal);
+    const input = modal.querySelector('#pickTextInput');
+    const done = (v) => { modal.remove(); resolve(v); };
+    modal.querySelector('#pickOk').onclick = () => done(input.value.trim());
+    modal.querySelector('#pickCancel').onclick = () => done(null);
+    input.onkeydown = (e) => { if (e.key === 'Enter') done(input.value.trim()); };
+    modal.onclick = (e) => { if (e.target === modal) done(null); };
+    setTimeout(() => input.focus(), 50);
+  });
+}
+
+/* ---------------------------- 回收站 ---------------------------- */
+screens.trash = async () => {
+  const main = $('#main');
+
+  const load = async () => {
+    const r = await INVOKE('trash:list', {});
+    if (!r.ok) return toast(r.error, 'err');
+    const items = r.items || [];
+
+    main.innerHTML = `<h1>回收站</h1>
+      <div class="sub">这里是从题库"删除"的题目。数据还在，可以恢复；也可以彻底删除。</div>
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <span class="row" style="gap:10px">
+            <label class="row" style="gap:6px;color:var(--muted);font-size:12.5px">
+              <input type="checkbox" id="trashPickAll" style="width:auto" /> 全选
+            </label>
+            <span class="muted" id="trashSel" style="font-size:12.5px">未选中</span>
+          </span>
+          <span class="row" style="gap:8px">
+            <button class="btn" id="restorePicked" disabled>恢复选中的题</button>
+            <button class="btn danger" id="purgePicked" disabled>彻底删除</button>
+            <button class="btn danger" id="emptyTrash">清空回收站</button>
+          </span>
+        </div>
+      </div>
+      <div class="card">
+        ${items.length === 0
+          ? '<div class="empty">回收站是空的。</div>'
+          : `<div class="qlist" id="trashList">${items.map((q) => `
+              <div class="qitem">
+                <div class="row" style="gap:8px;align-items:flex-start">
+                  <input type="checkbox" class="tpick" value="${q.id}" style="width:auto;margin-top:4px" />
+                  <div style="flex:1">
+                    <div class="st">${esc(q.stem)}</div>
+                    <div class="row" style="gap:12px;flex-wrap:wrap;margin-top:4px">
+                      ${Object.entries(q.options).map(([k, v]) => `<span class="muted" style="font-size:12.5px">${k}. ${esc(v)}</span>`).join('')}
+                    </div>
+                    <div class="meta" style="margin-top:4px">
+                      答案 <b class="okc">${esc(q.answer)}</b>｜
+                      ${q.groupName ? `<span class="chip">${esc(q.groupName)}</span>` : ''}
+                      ${(q.knowledgePoints || []).map((k) => `<span class="kp">${esc(k)}</span>`).join('')}
+                      ｜已练习 ${q.state.reps} 次，错 ${q.state.lapses} 次
+                    </div>
+                  </div>
+                </div>
+              </div>`).join('')}</div>`}
+      </div>`;
+
+    const tpicked = () => [...document.querySelectorAll('.tpick:checked')].map((c) => Number(c.value));
+    const updateSel = () => {
+      const n = tpicked().length;
+      const el = $('#trashSel');
+      if (el) el.textContent = n ? `已选中 ${n} 道` : '未选中';
+      const r1 = $('#restorePicked');
+      const r2 = $('#purgePicked');
+      if (r1) r1.disabled = n === 0;
+      if (r2) r2.disabled = n === 0;
+      const all = $('#trashPickAll');
+      if (all) all.checked = n > 0 && n === items.length;
+    };
+    document.querySelectorAll('.tpick').forEach((c) => (c.onchange = updateSel));
+    if ($('#trashPickAll')) {
+      $('#trashPickAll').onchange = (e) => {
+        document.querySelectorAll('.tpick').forEach((c) => { c.checked = e.target.checked; });
+        updateSel();
+      };
+    }
+
+    $('#restorePicked').onclick = async () => {
+      const ids = tpicked();
+      if (!ids.length) return;
+      const rr = await INVOKE('trash:restore', { ids });
+      toast(rr.ok ? rr.message : rr.error, rr.ok ? 'okc' : 'err');
+      load();
+    };
+    $('#purgePicked').onclick = async () => {
+      const ids = tpicked();
+      if (!ids.length) return;
+      const imp = await INVOKE('questions:deleteImpact', { ids });
+      const it = imp.impact || {};
+      const warn = [
+        `彻底删除选中的 ${ids.length} 道题？不可恢复。`,
+        '',
+        it.attempts ? `· 会一并删除 ${it.attempts} 条作答记录` : '· 这些题没有作答记录',
+        it.answered ? `· 其中 ${it.answered} 道练过，复习进度会丢失` : '',
+      ].filter(Boolean).join('\n');
+      if (!confirm(warn)) return;
+      const rr = await INVOKE('trash:purge', { ids });
+      toast(rr.ok ? rr.message : rr.error, rr.ok ? 'okc' : 'err');
+      load();
+    };
+    $('#emptyTrash').onclick = async () => {
+      if (!confirm('清空回收站会彻底删除里面所有题目，不可恢复。确定吗？')) return;
+      const rr = await INVOKE('trash:empty', {});
+      toast(rr.ok ? rr.message : rr.error, rr.ok ? 'okc' : 'err');
+      load();
+    };
+
+    updateSel();
+  };
+
+  await load();
+};
+
+/* ---------------------------- 启动 ---------------------------- */
+/** 打开某次练习的结果页（供历史回溯，也方便自动化验证排版）。 */
+async function openSessionResult(sessionId) {
+  const main = $('#main');
+  main.innerHTML = '<div class="card"><span class="spin"></span> 正在读取练习记录…</div>';
+  const r = await INVOKE('practice:replay', { sessionId: Number(sessionId) });
+  if (!r.ok) {
+    main.innerHTML = `<div class="card"><div class="crit">读取失败：${esc(r.error)}</div>
+      <div class="row" style="margin-top:12px"><button class="btn ghost" id="backToday">返回今日</button></div></div>`;
+    $('#backToday').onclick = () => go('today');
+    return;
+  }
+  renderResultCard(main, r.summary, r.replay, false);
+}
+
+(async () => {
+  try {
+    const c = await INVOKE('questions:counts');
+    if (c.ok) {
+      $('#navfoot').innerHTML = `题库 <code>${c.counts.total}</code> 题<br>今日待复习 <code>${c.counts.due}</code> 题`;
+    }
+  } catch (e) {
+    $('#main').innerHTML = `<div class="card"><div class="crit">无法连接后端：${esc(e.message)}</div></div>`;
+  }
+  const m = /#session=(\d+)/.exec(location.hash || '');
+  if (m) await openSessionResult(m[1]);
+  else go('today');
+
+  window.addEventListener('hashchange', () => {
+    const mm = /#session=(\d+)/.exec(location.hash || '');
+    if (mm) openSessionResult(mm[1]);
+  });
+})();
+</script>
+</body>
+</html>

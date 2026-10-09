@@ -1,0 +1,20 @@
+# 统一换行符：仓库内一律用 LF，检出到工作区时按平台自动转换。
+# 不加这个文件，Windows 上每次 git 操作都会刷一屏 "LF will be replaced by CRLF" 警告。
+* text=auto eol=lf
+
+# 明确二进制类型，避免 Git 尝试做行尾转换或文本 diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.exe binary
+*.db binary
+*.blob binary
+
+# 语言统计：把界面那个大 HTML 算作 HTML 而不是"其他"
+*.html linguist-documentation=false
+
+# 锁文件在 diff 里折叠显示（本项目零依赖，通常没有，留着以防将来引入）
+*-lock.json -diff
+package-lock.json -diff

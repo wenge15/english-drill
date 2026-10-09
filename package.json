@@ -1,0 +1,32 @@
+{
+  "name": "english-drill",
+  "version": "0.1.0",
+  "description": "英语练习软件：拍题录入 + 墨墨式每日练习与错题复习。零依赖，只用 Node 内置模块。",
+  "type": "commonjs",
+  "main": "src/shell-http.js",
+  "license": "MIT",
+  "private": true,
+  "keywords": [
+    "english",
+    "vocabulary",
+    "spaced-repetition",
+    "fsrs",
+    "quiz",
+    "study"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/launcher.js",
+    "serve": "node src/shell-http.js",
+    "test": "node test/run-all.js",
+    "test:http": "node test/http.test.js"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": ""
+  }
+}
