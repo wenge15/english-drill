@@ -159,6 +159,42 @@ test('关键：错题重做后调度只更新一次，绝不重复累计', () =>
   repo.close();
 });
 
+test('关键：没进重做轮的题，不能被重做轮的结算再复习一次', () => {
+  const repo = freshRepo();
+  repo.saveQuestion(mkQuestion(1));
+  repo.saveQuestion(mkQuestion(2));
+  const { session } = repo.startDailySession({ now: Date.now(), force: true });
+  const items = repo.sessionDetail(session.id).items;
+  const rightOf = (it) => repo.getQuestion(it.questionId).answer;
+  // 第 1 题一次做对（不会进重做轮），第 2 题做错（进重做轮）
+  repo.recordAnswer(session.id, items[0].questionId, rightOf(items[0]));
+  repo.recordAnswer(session.id, items[1].questionId, ['A', 'B', 'C', 'D'].find((L) => L !== rightOf(items[1])));
+
+  repo.finishSession(session.id);
+  assert.strictEqual(repo.getQuestion(items[0].questionId).state.reps, 1, '第一轮做对＝复习 1 次');
+
+  // 同一轮被重复结算（等价于看完结果页又重新打开同一个会话）：不能重复累计
+  repo.finishSession(session.id);
+  const good0 = repo.getQuestion(items[0].questionId).state;
+  assert.strictEqual(good0.reps, 1, '同一轮重复结算不能重复累计');
+  assert.strictEqual(good0.streak, 1, '重复结算不该把 streak 推高（否则会被误判为已掌握）');
+
+  // 重做轮只包含错题；第 1 题不应被再复习
+  repo.startRetryRound(session.id);
+  const round2 = repo.sessionDetail(session.id, Date.now(), 2).items;
+  assert.strictEqual(round2.length, 1, '只有错题进入重做轮');
+  repo.recordAnswer(session.id, round2[0].questionId, rightOf(round2[0]), { round: 2 });
+  repo.finishSession(session.id);
+
+  const good = repo.getQuestion(items[0].questionId).state;
+  const retried = repo.getQuestion(items[1].questionId).state;
+  assert.strictEqual(good.reps, 1, '没进重做轮的题，结算完整场也只能复习 1 次');
+  assert.strictEqual(retried.reps, 2, '重做轮里做对＝第 2 次复习');
+  assert.strictEqual(retried.lapses, 1, '重做做对不应再记一次错误');
+  assert.strictEqual(retried.streak, 1, '错一次再做对：streak 从 0 起算');
+  repo.close();
+});
+
 test('会话正确率与错题知识点汇总', () => {
   const repo = freshRepo();
   repo.saveQuestion(mkQuestion(1, ['时态']));

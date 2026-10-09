@@ -218,14 +218,19 @@ test('集训计划：错得多的题排在前面（优先复习）', () => {
   repo.close();
 });
 
-test('集训计划：错题很多时按每天上限摊开，超出部分并入最后一天', () => {
+test('集训计划：错题超过「天数 × 每天上限」时均摊，不挤爆最后一天', () => {
   const repo = freshRepo();
   makeWrongQuestions(repo, 25);
   const plan = repo.planSprint({ days: 7, perDayCap: 3 });
-  assert.strictEqual(plan.perDay, 3, '每天上限应生效');
   assert.strictEqual(plan.covered, 25, '仍然一道都不能漏');
+  assert.strictEqual(plan.perDayCounts.length, 7, '7 天都该有题');
+  // 25 题装不进 7 × 3 = 21，只能超上限；但必须摊平：每天 3~4 道，最多相差 1
+  const max = Math.max(...plan.perDayCounts);
+  const min = Math.min(...plan.perDayCounts);
+  assert.strictEqual(max, 4, `应均摊为每天 4 道（ceil(25/7)），实际最大 ${max}`);
+  assert.ok(max - min <= 1, `每天题量应尽量均匀，实际 ${plan.perDayCounts.join('/')}`);
   const last = plan.plan[plan.plan.length - 1];
-  assert.ok(last.count >= 3, `超出上限的题应并入最后一天，实际最后一天 ${last.count} 道`);
+  assert.ok(last.count <= max, `最后一天不该被挤爆，实际 ${last.count} 道`);
   repo.close();
 });
 

@@ -96,6 +96,10 @@ CREATE TABLE IF NOT EXISTS practice_questions (
   -- 否则一旦呈现顺序被重算/重洗，就会出现"选了 A、答案也是 A，却判错"的自相矛盾。
   presented_answer TEXT,
   presented_options TEXT,
+  -- 这"一轮"是否已经更新过复习调度。
+  -- finishSession 会被调用不止一次（提前结束后续练、看完结果页又重新打开同一个会话），
+  -- 没有这个标记的话，同一轮的题会被重复复习、间隔被重复累计。
+  scheduled INTEGER DEFAULT 0,
   UNIQUE(session_id, question_id, round)
 );
 CREATE INDEX IF NOT EXISTS idx_pq_session ON practice_questions(session_id);
@@ -165,6 +169,11 @@ function createRepo(dbPath) {
     }
     if (!cols.includes('presented_options')) {
       db.exec('ALTER TABLE practice_questions ADD COLUMN presented_options TEXT');
+    }
+    // 补"本轮是否已更新调度"标记。老库里升级前已完成的会话会被当成没结算过，
+    // 下次再结算时多复习一次；只影响遗留数据，新会话不受影响。
+    if (!cols.includes('scheduled')) {
+      db.exec('ALTER TABLE practice_questions ADD COLUMN scheduled INTEGER DEFAULT 0');
     }
     const qCols = db.prepare('PRAGMA table_info(questions)').all().map((c) => c.name);
     if (!qCols.includes('group_id')) {
@@ -498,7 +507,7 @@ function createRepo(dbPath) {
     if (!s) return null;
 
     const rows = db
-      .prepare(`SELECT pq.question_id, pq.position, pq.round, pq.picked, pq.correct, pq.status,
+      .prepare(`SELECT pq.question_id, pq.position, pq.round, pq.picked, pq.correct, pq.status, pq.scheduled,
                 q.stem, q.options, q.answer, q.explanation, q.knowledge_points, q.difficulty,
                 q.stability, q.difficulty_score, q.reps, q.lapses, q.streak, q.last_review_at, q.due_at,
                 q.interval_days, q.archived, q.source_note, q.image_path, q.answer_in_source, q.created_at, q.updated_at
@@ -521,6 +530,7 @@ function createRepo(dbPath) {
         knowledgePoints: q.knowledgePoints,
         difficulty: q.difficulty,
         status: r.status,
+        scheduled: r.scheduled === 1,
         picked: r.picked,
         correct: revealed ? Boolean(r.correct) : null,
         answer: revealed ? view.answer : null,
@@ -603,25 +613,38 @@ function createRepo(dbPath) {
       perQuestion.set(item.questionId, cur);
     }
 
+    // 只有"本轮真正作答过、且这一轮还没结算过"的题才更新调度：
+    //   ① 第一轮就做对、没进重做轮的题，不该被重做轮的结算再复习一次；
+    //   ② 同一轮被重复结算（提前结束后续练、重新打开结果页）也不该重复累计。
+    const pending = new Set();
+    for (const item of detail.items) {
+      if (item.picked !== null && !item.scheduled) pending.add(item.questionId);
+    }
+
     const applied = [];
     for (const [questionId, agg] of perQuestion) {
       const q = getQuestion(questionId);
       if (!q) continue;
-      const next = srs.review(q.state, agg.finalCorrect, {
-        now,
-        targetRetention: getSetting('targetRetention'),
-      });
-      db.prepare(`UPDATE questions SET stability=?, difficulty_score=?, reps=?, lapses=?, streak=?,
-        last_review_at=?, due_at=?, interval_days=? WHERE id=?`)
-        .run(next.stability, next.difficulty, next.reps, next.lapses, next.streak,
-          next.lastReviewAt, next.dueAt, next.intervalDays, questionId);
+      let state = q.state;
+      if (pending.has(questionId)) {
+        state = srs.review(q.state, agg.finalCorrect, {
+          now,
+          targetRetention: getSetting('targetRetention'),
+        });
+        db.prepare(`UPDATE questions SET stability=?, difficulty_score=?, reps=?, lapses=?, streak=?,
+          last_review_at=?, due_at=?, interval_days=? WHERE id=?`)
+          .run(state.stability, state.difficulty, state.reps, state.lapses, state.streak,
+            state.lastReviewAt, state.dueAt, state.intervalDays, questionId);
+        db.prepare('UPDATE practice_questions SET scheduled = 1 WHERE session_id = ? AND question_id = ? AND picked IS NOT NULL')
+          .run(sessionId, questionId);
+      }
       applied.push({
         questionId,
         finalCorrect: agg.finalCorrect,
         firstTryCorrect: agg.firstCorrect,
         attempts: agg.attempts,
-        intervalDays: next.intervalDays,
-        dueAt: next.dueAt,
+        intervalDays: state.intervalDays,
+        dueAt: state.dueAt,
       });
     }
 
@@ -909,18 +932,31 @@ function createRepo(dbPath) {
       return { ok: true, empty: true, message: '还没有错过的题目 —— 多练几轮再来集训。', days, planned: 0 };
     }
 
-    const perDay = Math.min(perDayCap, Math.ceil(rows.length / days));
+    // 每天分几道题，分两种情形：
+    //  - 装得下（错题 ≤ 天数 × 每天上限）：每天不超过上限；题少时集中在头几天，不硬凑满天数。
+    //  - 装不下：把超出的部分**均摊到每一天**。
+    //    旧实现顺序切分后把溢出全部并入最后一天，于是 25 题 / 7 天 / 上限 3 会排成
+    //    3,3,3,3,3,3,7 —— 最后一天被"挤爆"；错题一多（500 题 / 7 天 / 上限 60）
+    //    最后一天会堆到 140 道，用户根本做不完。溢出不可避免（天数与覆盖都是硬约束），
+    //    但可以摊平，而不是压在一天。
+    let sizes;
+    if (rows.length <= days * perDayCap) {
+      const perDay = Math.min(perDayCap, Math.ceil(rows.length / days));
+      sizes = Array.from({ length: days }, (_, d) => Math.max(0, Math.min(perDay, rows.length - d * perDay)));
+    } else {
+      const base = Math.floor(rows.length / days);
+      const extra = rows.length % days;
+      sizes = Array.from({ length: days }, (_, d) => base + (d < extra ? 1 : 0));
+    }
+    const perDay = Math.max(0, ...sizes);
+
     const buckets = [];
+    let cursor = 0;
     for (let d = 0; d < days; d += 1) {
-      const from = d * perDay;
-      const slice = rows.slice(from, from + perDay);
+      const slice = rows.slice(cursor, cursor + sizes[d]);
+      cursor += sizes[d];
       const date = new Date(startOfToday.getTime() + d * srs.DAY_MS);
       buckets.push({ dayIndex: d + 1, date, questions: slice });
-    }
-    // 超出容量的题并入最后一天（宁可一天多点，也不能漏掉错题）
-    const covered = buckets.reduce((a, b) => a + b.questions.length, 0);
-    if (covered < rows.length) {
-      buckets[buckets.length - 1].questions.push(...rows.slice(covered));
     }
 
     // 记录计划（含每天的时间戳），供界面展示
