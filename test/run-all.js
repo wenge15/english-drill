@@ -14,11 +14,15 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 
 const TEST_DIR = path.join(__dirname, '..', 'test');
 const args = process.argv.slice(2);
 const withHttp = args.includes('--with-http') || args.includes('--http');
+// 单个测试文件的硬超时。
+// 踩过的坑：某条测试忘了关闭它自己启动的假 HTTP 服务器，进程就一直挂着不退出，
+// 整个套件卡死而且不报错（实际卡了两分钟才发现）。这里加超时，超时按失败处理。
+const TIMEOUT_MS = Number(process.env.TEST_TIMEOUT_MS || 120000);
 
 const files = fs
   .readdirSync(TEST_DIR)
@@ -32,18 +36,15 @@ const failures = [];
 
 for (const file of files) {
   const full = path.join(TEST_DIR, file);
-  let out = '';
-  let crashed = false;
-  try {
-    out = execFileSync(process.execPath, [full], {
-      cwd: path.join(__dirname, '..'),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch (e) {
-    out = `${e.stdout || ''}\n${e.stderr || ''}`;
-    crashed = true;
-  }
+  const res = spawnSync(process.execPath, [full], {
+    cwd: path.join(__dirname, '..'),
+    encoding: 'utf8',
+    timeout: TIMEOUT_MS,
+  });
+
+  const out = `${res.stdout || ''}\n${res.stderr || ''}`;
+  const timedOut = Boolean(res.error && res.error.code === 'ETIMEDOUT');
+  const crashed = !timedOut && res.status !== 0;
 
   const passMatch = out.match(/^ℹ pass (\d+)/m);
   const failMatch = out.match(/^ℹ fail (\d+)/m);
@@ -53,16 +54,17 @@ for (const file of files) {
   totalPass += pass;
   totalFail += fail;
 
-  const bad = crashed || fail > 0 || pass === 0;
+  const bad = timedOut || crashed || fail > 0 || pass === 0;
   const mark = bad ? '✗' : '✓';
   const label = file.replace(/\.test\.js$/, '');
   process.stdout.write(`${mark} ${label.padEnd(16)} ${String(pass).padStart(4)} 通过`);
   if (fail > 0) process.stdout.write(`  ${fail} 失败`);
-  if (crashed) process.stdout.write('  （进程异常退出）');
+  if (timedOut) process.stdout.write(`  ⏱ 超时 ${TIMEOUT_MS / 1000}s（进程未退出，通常是漏了关服务器/定时器）`);
+  else if (crashed) process.stdout.write('  （进程异常退出）');
   process.stdout.write('\n');
 
   if (bad) {
-    failures.push({ file, out });
+    failures.push({ file, out, timedOut });
   }
 }
 
@@ -72,6 +74,10 @@ if (failures.length > 0) {
   process.stdout.write('失败详情：\n\n');
   for (const f of failures) {
     process.stdout.write(`--- ${f.file} ---\n`);
+    if (f.timedOut) {
+      process.stdout.write('进程在超时前没有退出。常见原因：测试里启动了 HTTP 服务器或定时器但忘了关闭。\n\n');
+      continue;
+    }
     // 只打关键行，避免刷屏
     const lines = f.out.split('\n');
     const keep = lines.filter(

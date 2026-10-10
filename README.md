@@ -76,7 +76,14 @@ A. completes  B. completed  C. was completed  D. has completed
 
 ### ② 图片识别（备用，需自备 Key）
 
-「录入题目 → 图片识别」，需要配一个**能读图**的模型（DeepSeek 不能读图）。
+「录入题目 → 图片识别」，需要配一个**能读图**的模型。
+
+**最省事：用 DeepSeek 自己的 `deepseek-flash`** —— 它支持图片输入
+（JPEG / PNG / GIF / WebP，[官方文档](https://api-docs.deepseek.com/zh-cn/guides/vision/)）。
+在设置页点「DeepSeek」预置即可，填上 Key 就能拍照录入，不用再申请第二家的账号。
+
+也可以换智谱 `glm-4v-flash`、通义 `qwen-vl-max`、OpenAI `gpt-4o`，
+或本地 Ollama（`qwen2.5vl:7b`，完全离线）。
 
 ### ③ 手动录入
 
@@ -234,11 +241,11 @@ test/                         每个模块一个测试文件 + run-all.js
 ## 测试
 
 ```bash
-npm test           # 204 项（13 个测试文件，自动发现）
+npm test           # 212 项（13 个测试文件，自动发现）
 npm run test:http  # 54 项端到端（需先起服务）
 ```
 
-合计 258 项断言。
+合计 266 项断言。
 
 ## 致谢
 

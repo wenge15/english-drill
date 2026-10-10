@@ -83,14 +83,44 @@ test('读图：请求里带上了图片与提示词，并能解析出题目', as
 });
 
 test('读图：未配置视觉模型时给出可执行的提示，而不是发一个必然失败的请求', async () => {
+  // 显式把 visionModel 清空来测这条路。
+  // 不能依赖"默认没配读图模型"—— 默认配置现在是带读图模型的
+  // （DeepSeek 的 deepseek-flash 支持读图），依赖默认值会让测试随默认值漂移。
   await assert.rejects(
-    () => model.extractQuestionsFromImage({ baseUrl: 'https://api.deepseek.com', apiKey: 'k', model: 'deepseek-chat' }, Buffer.from('x')),
+    () =>
+      model.extractQuestionsFromImage(
+        { baseUrl: 'https://api.deepseek.com', apiKey: 'k', model: 'deepseek-chat', visionModel: '' },
+        Buffer.from('x'),
+      ),
     (e) => {
       assert.strictEqual(e.code, 'NO_VISION_MODEL');
       assert.ok(e.message.includes('可读图'), '提示应说明该怎么办');
       return true;
     },
   );
+});
+
+test('读图：配置了视觉模型时确实会把它用于请求', async () => {
+  // 反面验证：有 visionModel 就不该再报 NO_VISION_MODEL，
+  // 而是真的发出请求（用假服务器接住，检查用的是哪个模型名）
+  let seenModel = '';
+  const fake = await fakeServer((body) => {
+    seenModel = body.model;
+    // 返回合法的"题目数组"JSON，让解析路径走到底
+    return {
+      json: {
+        choices: [{ message: { content: JSON.stringify({ questions: [] }) } }],
+      },
+    };
+  });
+  const r = await model.extractQuestionsFromImage(
+    { baseUrl: fake.baseUrl, apiKey: 'k', model: 'text-model', visionModel: 'vision-model' },
+    Buffer.from('x'),
+  );
+  assert.strictEqual(seenModel, 'vision-model', '读图请求应使用 visionModel 而不是文本 model');
+  assert.ok(r && Array.isArray(r.questions));
+  // 必须关掉假服务器：漏掉这一行会让进程挂着不退出
+  fake.server.close();
 });
 
 test('认证：远程服务缺 Key 时立刻报错，不发请求', async () => {
@@ -196,10 +226,32 @@ test('预置服务商配置都包含必需字段', () => {
   for (const [key, p] of Object.entries(model.PRESETS)) {
     assert.ok(p.baseUrl && p.model && p.label, `${key} 缺字段`);
     assert.strictEqual(typeof p.canReadImages, 'boolean', `${key} 需标注能否读图`);
+    // 标注能读图的服务商必须给出具体的读图模型名，否则功能会静默失效
+    if (p.canReadImages) {
+      assert.ok(p.visionModel, `${key} 标注可读图却缺少 visionModel`);
+    }
   }
   // 至少有一个能读图的服务商，否则用户没法用拍照录入
   assert.ok(Object.values(model.PRESETS).some((p) => p.canReadImages), '必须提供可读图的预置服务商');
-  assert.strictEqual(model.PRESETS.deepseek.canReadImages, false, 'DeepSeek 目前不能读图，不能误导用户');
+});
+
+test('DeepSeek 预置必须支持读图（deepseek-flash 是多模态模型）', () => {
+  // 这条曾经写反过：原来断言 canReadImages === false 并附注"DeepSeek 目前不能读图"，
+  // 把一个**过时的错误信息**锁成了期望行为，导致真正能用的功能被标成不可用。
+  // 依据官方文档：https://api-docs.deepseek.com/zh-cn/guides/vision/
+  // deepseek-flash 支持 JPEG/PNG/GIF/WebP 图片输入，走 OpenAI 兼容的 image_url 格式。
+  const ds = model.PRESETS.deepseek;
+  assert.strictEqual(ds.canReadImages, true, 'DeepSeek 的 deepseek-flash 支持读图，不能标成不可用');
+  assert.ok(ds.visionModel, '必须给出具体读图模型名');
+  assert.match(ds.visionModel, /flash/, `读图模型名应指向多模态模型，实际 ${ds.visionModel}`);
+  assert.strictEqual(ds.baseUrl, 'https://api.deepseek.com');
+});
+
+test('默认配置开箱即可读图（用户填了 Key 就能拍照录入）', () => {
+  // 默认值不该让用户再多做一步配置
+  const d = model.DEFAULT_CONFIG;
+  assert.ok(d.visionModel, '默认配置必须带读图模型，否则拍照录入需要用户自己发现并填写');
+  assert.strictEqual(d.baseUrl, 'https://api.deepseek.com');
 });
 
 /* ---------------- 知识点自动识别 ---------------- */

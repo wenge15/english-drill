@@ -14,8 +14,8 @@ const { buildVisionPrompt, buildAnalysisPrompt, parseExtraction, extractJson } =
 
 const DEFAULT_CONFIG = {
   baseUrl: 'https://api.deepseek.com',
-  model: 'deepseek-chat',
-  visionModel: '',
+  model: 'deepseek-flash',
+  visionModel: 'deepseek-flash',
   apiKey: '',
   timeoutMs: 120000,
   provider: 'openai-compatible',
@@ -30,11 +30,16 @@ function toDataUrl(bytes, mime = 'image/png') {
 /** 已知服务商的默认配置，方便用户一键切换。 */
 const PRESETS = {
   deepseek: {
-    label: 'DeepSeek（纯文本，不能读图）',
+    // deepseek-flash 是多模态模型，既能纯文本对话，也能读图。
+    // 依据：https://api-docs.deepseek.com/zh-cn/guides/vision/
+    // （支持 JPEG/PNG/GIF/WebP，走标准 OpenAI 兼容的 image_url 格式；
+    // 旧模型名 deepseek-v4-flash-vision-exp 已下线，请求由最新的 Flash 承接。
+    // 旧的 deepseek-chat 不能读图 —— 本预置以前标注"不能读图"是过时信息。）
+    label: 'DeepSeek（可读图：deepseek-flash）',
     baseUrl: 'https://api.deepseek.com',
-    model: 'deepseek-chat',
-    visionModel: '',
-    canReadImages: false,
+    model: 'deepseek-flash',
+    visionModel: 'deepseek-flash',
+    canReadImages: true,
   },
   zhipu: {
     label: '智谱 GLM（可读图：glm-4v）',

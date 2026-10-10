@@ -308,7 +308,8 @@ function createHost(opts) {
           ...repo.allSettings(),
           baseUrl: s.baseUrl || model.DEFAULT_CONFIG.baseUrl,
           model: s.model || model.DEFAULT_CONFIG.model,
-          visionModel: s.visionModel || '',
+          // 回退到默认值而不是空串：让"开箱能读图"这件事在界面上如实反映
+          visionModel: s.visionModel || model.DEFAULT_CONFIG.visionModel || '',
           provider: s.provider || 'openai-compatible',
           hasApiKey: Boolean(s.apiKey),
           apiKeyMasked: s.apiKey ? `${s.apiKey.slice(0, 4)}****${s.apiKey.slice(-4)}` : '',
@@ -326,6 +327,57 @@ function createHost(opts) {
       for (const [k, v] of Object.entries(rest)) if (allowed.includes(k)) toStore[k] = v;
       if (Object.keys(toStore).length) store.set(toStore);
       return { ok: true };
+    },
+    /**
+     * 按预置校准配置。
+     *
+     * 为什么需要：用户一旦点过"保存"，配置就以显式值存在本地（含空字符串），
+     * 之后再改 DEFAULT_CONFIG / PRESETS 的默认值**对他不生效** —— 旧值会一直覆盖。
+     * 于是"官方文档更新了某个服务商能读图"这类修正，老用户永远拿不到。
+     *
+     * 安全边界：只在新值**非空**、旧值**为空**时补全。
+     * 从不覆盖用户已填的任何内容，也不改 baseUrl（除非它是空的）。
+     */
+    'settings:alignPreset': () => {
+      const s = store.get();
+      // 用"生效值"去匹配预置，而不是原始存储值。
+      // 踩过的坑：用户从没保存过时 store 里 baseUrl 是空的，界面显示的是默认值，
+      // 若拿空字符串去比对就永远匹配不上预置，校准功能形同虚设。
+      const effectiveBaseUrl = s.baseUrl || model.DEFAULT_CONFIG.baseUrl;
+      const preset = Object.values(model.PRESETS).find((p) => p.baseUrl === effectiveBaseUrl);
+      if (!preset) {
+        return {
+          ok: true,
+          changed: false,
+          reason: `当前服务地址（${effectiveBaseUrl}）不在已知预置里，不改动以免破坏你的自定义配置`,
+        };
+      }
+
+      const patch = {};
+      const filled = [];
+      // baseUrl 为空时也一并落盘，让存储与界面显示一致
+      if (!s.baseUrl) {
+        patch.baseUrl = preset.baseUrl;
+        filled.push(`服务地址 → ${preset.baseUrl}`);
+      }
+      if (!s.visionModel && preset.visionModel) {
+        patch.visionModel = preset.visionModel;
+        filled.push(`读图模型 → ${preset.visionModel}`);
+      }
+      if (!s.model && preset.model) {
+        patch.model = preset.model;
+        filled.push(`文本模型 → ${preset.model}`);
+      }
+      if (Object.keys(patch).length === 0) {
+        return { ok: true, changed: false, reason: '配置已经是最新的，没有需要补全的字段' };
+      }
+      store.set(patch);
+      return {
+        ok: true,
+        changed: true,
+        patch,
+        message: `已按「${preset.label}」补全：${filled.join('；')}`,
+      };
     },
     'settings:test': async ({ vision = false } = {}) => {
       const r = await model.testConnection(modelConfig(), { vision });

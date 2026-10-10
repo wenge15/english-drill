@@ -719,8 +719,9 @@ A. completes  B. completed  C. was completed  D. has completed
 
       <div id="tab-image" style="display:none">
         <div class="hintbox">
-          这条路需要你自己配置一个<b>能读图</b>的模型（设置页里选）。DeepSeek 不能读图，
-          可选智谱 glm-4v、通义 qwen-vl-max 等。如果只是偶尔录题，用「文本导入」更快。
+          这条路需要你配置一个<b>能读图</b>的模型。DeepSeek 的 <code>deepseek-flash</code>
+          就能读图（设置页点「DeepSeek」预置即可），也可选智谱 glm-4v、通义 qwen-vl-max。
+          如果只是偶尔录题，用「文本导入」更快。
         </div>
         <div class="drop" id="drop">点击选择图片，或把图片拖到这里 / 直接 Ctrl+V 粘贴截图</div>
         <div class="row" id="thumbs" style="margin-top:12px"></div>
@@ -1402,7 +1403,7 @@ screens.settings = async () => {
 
     <div class="card">
       <h2>读图与解析模型</h2>
-      <div class="sub" style="margin-bottom:12px">拍照录入需要一个<b>能读图</b>的模型。DeepSeek 目前不能读图，所以读图要另选服务商。</div>
+      <div class="sub" style="margin-bottom:12px">拍照录入需要一个<b>能读图</b>的模型。DeepSeek 的 <code>deepseek-flash</code> 即可（点下面的预置一键套用），也可换其它服务商。</div>
       <label class="fld"><span>服务商预置（点击套用）</span>
         <div class="row" id="presets"></div></label>
       <div class="grid2">
@@ -1416,6 +1417,12 @@ screens.settings = async () => {
         <button class="btn" id="saveModel">保存模型设置</button>
         <button class="btn ghost" id="testText">测试文本模型</button>
         <button class="btn ghost" id="testVision">测试读图模型</button>
+        <button class="btn ghost" id="alignPreset" title="把当前服务商的新默认值补进来（只在字段为空时补，不覆盖你填的内容）">按预置更新</button>
+      </div>
+      <div class="hintbox" style="margin-top:10px">
+        已经保存过的配置不会随软件更新而变。如果某个服务商新增了能力（例如 DeepSeek 的
+        <code>deepseek-flash</code> 支持读图），点「按预置更新」可把空缺的字段补上 ——
+        <b>它只在字段为空时填，不会覆盖你已经填好的内容</b>。
       </div>
       <div id="testOut" class="muted" style="margin-top:10px;font-size:12.5px"></div>
     </div>
@@ -1476,6 +1483,18 @@ screens.settings = async () => {
   };
   $('#testText').onclick = () => doTest(false);
   $('#testVision').onclick = () => doTest(true);
+
+  // 按预置补全空缺字段。
+  // 用途：已保存的配置不会随软件更新而变，某个服务商新增能力（例如 DeepSeek
+  // 的 deepseek-flash 支持读图）时，老用户拿不到 —— 这个按钮把它补上。
+  $('#alignPreset').onclick = async () => {
+    const rr = await INVOKE('settings:alignPreset');
+    if (!rr.ok) return toast(rr.error, 'err');
+    if (!rr.changed) return toast(rr.reason || '已经是最新配置', 'okc');
+    toast(rr.message, 'okc');
+    // 重新渲染设置页，让新值显示出来
+    go('settings');
+  };
   $('#openDir').onclick = async () => {
     if (window.dsh?.openDataDir) await window.dsh.openDataDir();
     else toast('数据目录：' + dir.dataDir);

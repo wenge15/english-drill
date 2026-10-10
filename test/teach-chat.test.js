@@ -333,3 +333,67 @@ test('词汇题释义：本地未收录时明确告知，不编造意思', async
   }
   host.close();
 });
+
+/* ---------------- 预置校准（旧配置拿不到新默认值的问题） ---------------- */
+
+test('预置校准：从没保存过的配置也能匹配上预置并补全读图模型', async () => {
+  // 踩过的坑：用户从没保存过时 store 里 baseUrl 是空的，界面显示的是默认值。
+  // 若拿空字符串去比对预置就永远匹配不上，"按预置更新"形同虚设。
+  const host = mkHost(); // 不设任何 config，模拟全新/从未保存的状态
+  const before = await host.invoke('settings:get');
+  assert.strictEqual(before.settings.visionModel, 'deepseek-flash', '界面应显示默认的读图模型');
+
+  const r = await host.invoke('settings:alignPreset');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.changed, true, `应补全字段，实际：${r.reason}`);
+  assert.ok(r.message.includes('deepseek-flash'), `提示应说明补了什么，实际 ${r.message}`);
+
+  const after = await host.invoke('settings:get');
+  assert.strictEqual(after.settings.visionModel, 'deepseek-flash');
+  assert.strictEqual(after.settings.baseUrl, 'https://api.deepseek.com');
+  assert.strictEqual(after.settings.model, 'deepseek-flash');
+  host.close();
+});
+
+test('预置校准：已经是最新时不改动任何东西', async () => {
+  const host = mkHost();
+  await host.invoke('settings:alignPreset');
+  const second = await host.invoke('settings:alignPreset');
+  assert.strictEqual(second.changed, false, '第二次不该再改');
+  assert.ok(second.reason.includes('最新'), `应说明已是最新，实际 ${second.reason}`);
+  host.close();
+});
+
+test('预置校准：绝不覆盖用户自己填的读图模型', async () => {
+  const host = mkHost({
+    baseUrl: 'https://api.deepseek.com',
+    model: 'my-text-model',
+    visionModel: 'my-vision-model',
+  });
+  const r = await host.invoke('settings:alignPreset');
+  assert.strictEqual(r.changed, false, '用户已填内容时不该改动');
+  const s = await host.invoke('settings:get');
+  assert.strictEqual(s.settings.visionModel, 'my-vision-model', '用户填的读图模型必须保留');
+  assert.strictEqual(s.settings.model, 'my-text-model', '用户填的文本模型必须保留');
+  host.close();
+});
+
+test('预置校准：自定义服务地址不被改动（避免破坏自建网关）', async () => {
+  const host = mkHost({ baseUrl: 'https://my-own-gateway.example.com/v1', model: 'gpt-4o' });
+  const r = await host.invoke('settings:alignPreset');
+  assert.strictEqual(r.changed, false, '不在预置里的地址不该被动');
+  assert.ok(r.reason.includes('不在已知预置'), `应说明原因，实际 ${r.reason}`);
+  const s = await host.invoke('settings:get');
+  assert.strictEqual(s.settings.baseUrl, 'https://my-own-gateway.example.com/v1', '自定义地址必须保留');
+  host.close();
+});
+
+test('预置校准：只补空缺，不动用户已填的地址', async () => {
+  // 地址手填但与预置相同，读图模型空着 —— 应只补读图模型
+  const host = mkHost({ baseUrl: 'https://api.deepseek.com' });
+  const r = await host.invoke('settings:alignPreset');
+  assert.strictEqual(r.changed, true);
+  assert.ok(r.patch.visionModel, '应补读图模型');
+  assert.strictEqual(r.patch.baseUrl, undefined, '地址已填，不该出现在补丁里');
+  host.close();
+});
