@@ -671,6 +671,35 @@ screens.capture = async () => {
   let images = [];       // 已选图片（备用路径）
   let activeTab = 'text';
 
+  /**
+   * 测试钩子：把一批题目直接放进核对页。
+   *
+   * 用途：自动化验证"核对答案"这条链路（读图 → 核对 → 标出冲突）时，
+   * 需要绕开真实的图片上传。没有这个钩子，测试就只能去摸闭包内部细节，
+   * 那种测试很脆（实现一改就断）。
+   *
+   * 注意位置：必须放在 screens.capture **一进来**就执行的地方，
+   * 不能放进 renderReview 里 —— 那样会"要用它去触发它自己"，永远调不到。
+   */
+  window.__setPending = (questions) => {
+    pending = (questions || []).map((q) => ({
+      stem: q.stem || '',
+      options: q.options || {},
+      answer: q.answer || '',
+      explanation: q.explanation || '',
+      knowledgePoints: q.knowledgePoints || [],
+      difficulty: q.difficulty || 'medium',
+      answerInSource: q.answerInSource !== undefined ? q.answerInSource : true,
+      groupName: q.groupName || '',
+    }));
+    if (pending.length === 0) {
+      $('#reviewArea').innerHTML = '';
+      return 0;
+    }
+    renderReview([]);
+    return pending.length;
+  };
+
   main.innerHTML = `
     <h1>录入题目</h1>
     <div class="sub">把题目文本粘进来 → 自动拆出题干/选项/答案 → 核对修改 → 入库成为每日练习。</div>
@@ -931,7 +960,9 @@ Answers: 21-B  22-C  23-B`;
   };
 
   /* ---------------- 核对与入库（三条路径共用） ---------------- */
-  function renderReview(warns) {
+  function renderReview(warns, keepVerify = false) {
+    // 换了批次就清掉上一轮的核对结果，否则标记会串到新题上（下标含义已变）
+    if (!keepVerify) verifyMap = {};
     const needFix = pending.filter((q) => !q.stem || Object.keys(q.options || {}).length < 2 || !q.answer).length;
     const groupName = ($('#importGroup')?.value || '').trim();
     $('#reviewArea').innerHTML = `
@@ -944,6 +975,12 @@ Answers: 21-B  22-C  23-B`;
           </label>
         </div>
         ${warns && warns.length ? `<div class="warnbox">解析时有 ${warns.length} 处要你确认：<ul>${warns.slice(0, 12).map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
+        <div class="hintbox" style="margin-bottom:10px">
+          <b>答案不一定对。</b>读图会认错字母（B 认成 8）、答案栏可能串行，模型自己判断也可能错。
+          点「核对答案」会让模型<b>不带图片、不看原答案</b>把每道题独立重做一遍，
+          与识别出的答案比对；两边<b>不一致</b>的题会标红，请对照原卷确认。不会替你改答案。
+        </div>
+        <div id="verifyOut"></div>
         <div class="row" style="justify-content:space-between;margin-bottom:8px">
           <span class="row" style="gap:10px">
             <label class="row" style="gap:6px;color:var(--muted);font-size:12.5px">
@@ -952,6 +989,7 @@ Answers: 21-B  22-C  23-B`;
             <span class="muted" id="pickInfo" style="font-size:12.5px">未选中</span>
           </span>
           <span class="row" style="gap:8px">
+            <button class="btn ghost" id="verifyBtn">核对答案</button>
             <button class="btn danger" id="delPicked" disabled>删除选中的题</button>
             <button class="btn danger" id="clearAll">全部清空</button>
           </span>
@@ -1001,6 +1039,69 @@ Answers: 21-B  22-C  23-B`;
 
     renderQList();
 
+    /**
+     * 核对答案：让模型独立重做一遍，与识别出的答案比对。
+     *
+     * 关键点：
+     *  1. 先把界面上的编辑 collect() 回去 —— 用户可能已经改过题干，要用改后的题去核对
+     *  2. 核对**只提示、不改答案**。冲突时由用户对照原卷决定，因为两条路径都可能错：
+     *     识别的可能对（模型做题会错），独立的也可能对（印在卷面上的答案也常被认错）
+     *  3. 核对完只重绘标记，不重建整个列表（避免丢掉用户正在编辑的内容）
+     */
+    $('#verifyBtn').onclick = async () => {
+      collect();
+      const usable = pending.filter((q) => q.stem && Object.keys(q.options || {}).length >= 2);
+      if (usable.length === 0) return toast('没有可核对的题目（需要题干和至少 2 个选项）', 'err');
+
+      const btn = $('#verifyBtn');
+      btn.disabled = true;
+      const out = $('#verifyOut');
+      out.innerHTML = `<div class="hintbox"><span class="spin"></span> 正在让模型独立重做这 ${usable.length} 道题…（每题一次请求，稍等）</div>`;
+
+      // 只把有题干/选项的题送出去；用下标映射回来，保证标记落在正确的题上
+      const idxMap = [];
+      const payload = [];
+      pending.forEach((q, i) => {
+        if (q.stem && Object.keys(q.options || {}).length >= 2) {
+          idxMap.push(i);
+          payload.push({ stem: q.stem, options: q.options, answer: q.answer });
+        }
+      });
+
+      const r = await INVOKE('capture:verifyAnswers', { questions: payload });
+      btn.disabled = false;
+
+      if (!r.ok) {
+        out.innerHTML = '';
+        return toast(r.error || '核对失败', 'err');
+      }
+      if (r.error) {
+        out.innerHTML = `<div class="warnbox">${esc(r.error)}。可以先在设置页配置模型，或自己逐题确认答案。</div>`;
+        return;
+      }
+
+      verifyMap = {};
+      for (const item of r.items || []) {
+        const realIdx = idxMap[item.index];
+        if (realIdx === undefined) continue;
+        verifyMap[realIdx] = item;
+      }
+
+      const conflicts = r.conflicts || 0;
+      out.innerHTML = `<div class="${conflicts ? 'warnbox' : 'hintbox'}">
+        核对完成：<b>${r.checked}</b> 道题已独立重做｜
+        <span class="okc">一致 ${r.agreed}</span>｜
+        ${conflicts ? `<b class="crit">不一致 ${conflicts}（请对照原卷确认）</b>` : '不一致 0'}｜
+        无法判断 ${r.unknown}
+        ${conflicts ? '<div style="margin-top:4px">下面标红的题就是答案可能被认错的，请重点看这几道。</div>' : ''}
+      </div>`;
+      // 只重绘标记：重新渲染题目列表（内容来自 pending，用户编辑已 collect 过）
+      renderQList();
+      $('#pickAll').checked = false;
+      if (window.__updatePick) window.__updatePick();
+      toast(conflicts ? `有 ${conflicts} 道题答案需要确认` : '核对完成，未发现矛盾', conflicts ? 'err' : 'okc');
+    };
+
     // 批量改分组：立刻反映到每道题上，避免"改了没生效"
     $('#batchGroup').oninput = (e) => {
       const v = e.target.value.trim();
@@ -1033,6 +1134,29 @@ Answers: 21-B  22-C  23-B`;
     $('#dropAll').onclick = () => { pending = []; $('#reviewArea').innerHTML = ''; };
   }
 
+  /**
+   * 核对结果（抗干扰）。键是题在 pending 里的下标。
+   * 由「核对答案」按钮填充，renderQList 读取它来显示标记。
+   */
+  let verifyMap = {};
+
+  /** 生成一道题的核对标记。冲突必须显眼，因为那是唯一需要人介入的情况。 */
+  function verifyBadge(i) {
+    const v = verifyMap[i];
+    if (!v) return '';
+    if (v.status === 'conflict') {
+      return `<div class="warnbox" style="margin-bottom:8px;border-color:#f0603c">
+        <b class="crit">⚠ 答案可能不对</b>：${esc(v.message)}
+        ${v.reason ? `<div class="muted" style="font-size:12px;margin-top:3px">模型独立作答的依据：${esc(v.reason)}</div>` : ''}
+        <div style="margin-top:4px">${esc(v.suggestion)}</div>
+      </div>`;
+    }
+    if (v.status === 'agree') {
+      return `<div class="muted" style="margin-bottom:8px;font-size:12.5px"><span class="okc">✓ 已核对</span>：${esc(v.message)}</div>`;
+    }
+    return `<div class="muted" style="margin-bottom:8px;font-size:12.5px">核对未果：${esc(v.message)}。${esc(v.suggestion || '')}</div>`;
+  }
+
   function renderQList() {
     $('#qlist').innerHTML = pending.map((q, i) => `
       <div class="qitem" data-i="${i}">
@@ -1040,12 +1164,14 @@ Answers: 21-B  22-C  23-B`;
           <span class="row" style="gap:8px">
             <input type="checkbox" class="qpick" data-i="${i}" style="width:auto" title="勾选后可批量删除" />
             <b>第 ${i + 1} 题${q.number ? `（原题号 ${q.number}）` : ''}</b>
+            ${verifyMap[i] && verifyMap[i].status === 'conflict' ? '<span class="crit" style="font-size:12px">答案待确认</span>' : ''}
           </span>
           <span class="row" style="gap:6px">
             ${q.confidence !== null && q.confidence !== undefined ? `<span class="muted" style="font-size:12px">识别信心 ${(q.confidence * 100).toFixed(0)}%</span>` : ''}
             <button class="btn danger" data-del="${i}" style="padding:3px 9px;font-size:12px">删除这道</button>
           </span>
         </div>
+        ${verifyBadge(i)}
         ${q.issues && q.issues.length ? `<div class="warnbox" style="margin-bottom:8px">${q.issues.map(esc).join('<br>')}</div>` : ''}
         <label class="fld"><span>题干</span><textarea data-f="stem">${esc(q.stem)}</textarea></label>
         <div class="grid2">

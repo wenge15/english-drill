@@ -171,3 +171,59 @@ test('补全提示词带上了题干与选项', () => {
   assert.ok(p.includes('B. goes'));
   assert.ok(p.includes('JSON'));
 });
+
+/* ---------------- 抗干扰核对 ---------------- */
+
+test('独立作答提示词：只给题干与选项，不给答案', () => {
+  const p = ex.buildSolverPrompt({
+    stem: 'He ____ to school every day.',
+    options: { A: 'go', B: 'goes' },
+    // 即使调用方传了 answer，也不该出现在提示词里
+    answer: 'B',
+  });
+  assert.ok(p.includes('He ____ to school every day.'), '应包含题干');
+  assert.ok(p.includes('A. go') && p.includes('B. goes'), '应包含选项');
+  assert.ok(p.includes('JSON'), '应要求 JSON 输出');
+  assert.ok(/独立/.test(p), '应明确要求独立完成');
+  // 关键：不能泄露答案，否则模型会顺着走，"核对"退化成复读
+  assert.ok(!/答案是\s*B|正确答案[：:]\s*B/.test(p), '提示词不得出现答案');
+  assert.ok(!p.includes('answer": "B'), '提示词不得把答案当示例给出');
+});
+
+test('独立作答提示词：允许模型承认题目有问题，而不是硬猜', () => {
+  const p = ex.buildSolverPrompt({ stem: '____', options: { A: 'a', B: 'b' } });
+  assert.ok(/设为空字符串|不完整|多个选项/.test(p), '应允许模型表示无法确定');
+});
+
+test('答案比对：一致 / 冲突 / 无法判断 三种情况都要覆盖', () => {
+  // 一致
+  let r = ex.crossCheckAnswers('B', 'B');
+  assert.strictEqual(r.status, 'agree');
+  assert.ok(r.message.includes('一致'));
+
+  // 大小写与空格归一化后仍算一致
+  r = ex.crossCheckAnswers(' b ', 'B');
+  assert.strictEqual(r.status, 'agree', '大小写/空格不该被当成不一致');
+
+  // 冲突：必须如实列出两边分别是什么
+  r = ex.crossCheckAnswers('C', 'B');
+  assert.strictEqual(r.status, 'conflict');
+  assert.ok(r.message.includes('C') && r.message.includes('B'), `要写清两边，实际 ${r.message}`);
+  assert.ok(/核对|确认/.test(r.suggestion), '冲突时必须要求人工核对');
+
+  // 一边缺失 → unknown，不能硬判成冲突（否则会误导用户去改对的答案）
+  assert.strictEqual(ex.crossCheckAnswers('B', '').status, 'unknown');
+  assert.strictEqual(ex.crossCheckAnswers('', 'B').status, 'unknown');
+  assert.strictEqual(ex.crossCheckAnswers('', '').status, 'unknown');
+
+  // 非法字母（模型可能返回 Z 或汉字）不能算有效答案
+  assert.strictEqual(ex.crossCheckAnswers('B', 'Z').status, 'unknown');
+  assert.strictEqual(ex.crossCheckAnswers('甲', 'B').status, 'unknown');
+});
+
+test('答案比对：识别的答案不可用时，提示参考独立作答但别直接采信', () => {
+  const r = ex.crossCheckAnswers('', 'B');
+  assert.strictEqual(r.status, 'unknown');
+  assert.ok(r.message.includes('B'), '应告诉用户独立作答得出什么');
+  assert.ok(/确认/.test(r.suggestion), '应提醒自己确认');
+});

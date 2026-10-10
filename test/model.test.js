@@ -310,3 +310,130 @@ test('知识点：分批调用，超量题目不会一次全发出去', async ()
   assert.ok(r.items.every((x) => x.knowledgePoints.includes('测试考点')));
   fake.server.close();
 });
+
+/* ---------------- 抗干扰核对 ---------------- */
+
+test('核对：请求里绝不包含原答案或图片（独立性是这功能的全部意义）', async () => {
+  const fake = await fakeServer(() => replyWith(JSON.stringify({ answer: 'B', reason: '因为时态' })));
+  await model.verifyAnswers(
+    { baseUrl: fake.baseUrl, apiKey: 'k', model: 'm' },
+    [{ stem: 'He ____ to school.', options: { A: 'go', B: 'goes' }, answer: 'B' }],
+  );
+  const sent = JSON.stringify(fake.received[0].body);
+  // 如果原答案被喂进去，模型会顺着它走，"独立核对"就退化成复读
+  assert.ok(!sent.includes('"answer":"B"') || !/正确答案|答案是/.test(sent), '请求不该包含原答案');
+  assert.ok(!/"type":"image_url"/.test(sent), '核对请求不该带图片');
+  assert.ok(sent.includes('goes'), '应包含选项内容供模型判断');
+  fake.server.close();
+});
+
+test('核对：识别答案与独立作答冲突时标为 conflict，且不改动原答案', async () => {
+  // 模拟"读图把 B 认成 C"：识别给 C，模型独立做出来是 B
+  const fake = await fakeServer(() => replyWith(JSON.stringify({ answer: 'B', reason: '主语第三人称单数' })));
+  const r = await model.verifyAnswers(
+    { baseUrl: fake.baseUrl, apiKey: 'k', model: 'm' },
+    [{ stem: 'He ____ to school every day.', options: { A: 'go', B: 'goes', C: 'going' }, answer: 'C' }],
+  );
+  assert.strictEqual(r.checked, 1);
+  assert.strictEqual(r.conflicts, 1, '应报告 1 处冲突');
+  assert.strictEqual(r.agreed, 0);
+  const item = r.items[0];
+  assert.strictEqual(item.status, 'conflict');
+  assert.strictEqual(item.independent, 'B');
+  assert.ok(item.message.includes('C') && item.message.includes('B'), `应写明两边分别是什么，实际 ${item.message}`);
+  assert.ok(item.suggestion.includes('核对'), '应提示用户核对而不是替他决定');
+  fake.server.close();
+});
+
+test('核对：一致时标为 agree', async () => {
+  const fake = await fakeServer(() => replyWith(JSON.stringify({ answer: 'B' })));
+  const r = await model.verifyAnswers(
+    { baseUrl: fake.baseUrl, apiKey: 'k', model: 'm' },
+    [{ stem: 'He ____ here.', options: { A: 'go', B: 'goes' }, answer: 'B' }],
+  );
+  assert.strictEqual(r.agreed, 1);
+  assert.strictEqual(r.conflicts, 0);
+  assert.strictEqual(r.items[0].status, 'agree');
+  fake.server.close();
+});
+
+test('核对：模型不表态时标为 unknown，不硬判成冲突', async () => {
+  const fake = await fakeServer(() => replyWith(JSON.stringify({ answer: '', reason: '题目信息不全' })));
+  const r = await model.verifyAnswers(
+    { baseUrl: fake.baseUrl, apiKey: 'k', model: 'm' },
+    [{ stem: '____', options: { A: 'go', B: 'goes' }, answer: 'B' }],
+  );
+  assert.strictEqual(r.unknown, 1);
+  assert.strictEqual(r.conflicts, 0, '模型没给答案不该算冲突，否则会误导用户');
+  assert.ok(r.items[0].message.includes('没能给出答案'), r.items[0].message);
+  fake.server.close();
+});
+
+test('核对：模型返回选项原文也能映射回字母', async () => {
+  const fake = await fakeServer(() => replyWith(JSON.stringify({ answer: 'goes' })));
+  const r = await model.verifyAnswers(
+    { baseUrl: fake.baseUrl, apiKey: 'k', model: 'm' },
+    [{ stem: 'He ____ here.', options: { A: 'go', B: 'goes' }, answer: 'B' }],
+  );
+  assert.strictEqual(r.items[0].independent, 'B', '应把选项原文映射成字母');
+  assert.strictEqual(r.agreed, 1);
+  fake.server.close();
+});
+
+test('核对：模型返回不在选项里的字母时视为未给出，不算冲突', async () => {
+  const fake = await fakeServer(() => replyWith(JSON.stringify({ answer: 'Z' })));
+  const r = await model.verifyAnswers(
+    { baseUrl: fake.baseUrl, apiKey: 'k', model: 'm' },
+    [{ stem: 'He ____ here.', options: { A: 'go', B: 'goes' }, answer: 'A' }],
+  );
+  assert.strictEqual(r.items[0].independent, '');
+  assert.strictEqual(r.conflicts, 0, '非法答案不该算冲突');
+  assert.strictEqual(r.unknown, 1);
+  fake.server.close();
+});
+
+test('核对：没配模型时如实说明，不假装核对过', async () => {
+  const r = await model.verifyAnswers(
+    { baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'm' },
+    [{ stem: 'He ____ here.', options: { A: 'go', B: 'goes' }, answer: 'A' }],
+  );
+  assert.ok(r.error, '应给出错误说明');
+  assert.strictEqual(r.checked, 0, '不该声称核对过');
+  assert.ok(r.items.every((x) => x.status === 'unknown'));
+});
+
+test('核对：选项不足或题干为空的题被跳过', async () => {
+  const fake = await fakeServer(() => replyWith(JSON.stringify({ answer: 'A' })));
+  const r = await model.verifyAnswers(
+    { baseUrl: fake.baseUrl, apiKey: 'k', model: 'm' },
+    [
+      { stem: 'Only one option ____.', options: { A: 'a' }, answer: 'A' },
+      { stem: '', options: { A: 'a', B: 'b' }, answer: 'A' },
+      { stem: 'Good ____ here.', options: { A: 'a', B: 'b' }, answer: 'A' },
+    ],
+  );
+  assert.strictEqual(r.checked, 1, '只该核对信息完整的那一道');
+  assert.strictEqual(fake.received.length, 1, '跳过的不该发请求（省额度）');
+  fake.server.close();
+});
+
+test('核对：单题失败不影响其它题，且说明失败原因', async () => {
+  let n = 0;
+  const fake = await fakeServer(() => {
+    n += 1;
+    if (n === 1) return { status: 500, json: { error: 'boom' } };
+    return replyWith(JSON.stringify({ answer: 'A' }));
+  });
+  const r = await model.verifyAnswers(
+    { baseUrl: fake.baseUrl, apiKey: 'k', model: 'm' },
+    [
+      { stem: 'First ____ here.', options: { A: 'a', B: 'b' }, answer: 'A' },
+      { stem: 'Second ____ here.', options: { A: 'a', B: 'b' }, answer: 'A' },
+    ],
+  );
+  assert.strictEqual(r.checked, 2, '两题都要有结论');
+  assert.strictEqual(r.items[0].status, 'unknown', '失败的那题标为 unknown');
+  assert.ok(r.items[0].message.includes('核对失败'), r.items[0].message);
+  assert.strictEqual(r.items[1].status, 'agree', '另一题应正常核对');
+  fake.server.close();
+});

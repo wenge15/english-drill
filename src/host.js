@@ -195,6 +195,26 @@ function createHost(opts) {
         return { ok: false, error: e.message };
       }
     },
+    /**
+     * 抗干扰核对：让模型独立做一遍这些题，与识别出的答案比对。
+     *
+     * 用途：读图/粘贴进来的答案不一定对（认错字母、答案栏串行、模型判错）。
+     * 这里用一条**不带图片、不带原答案**的独立路径重做一遍，
+     * 不一致的题返回 status='conflict'，界面会显著标出让用户核对。
+     */
+    'capture:verifyAnswers': async ({ questions }) => {
+      const list = (questions || []).map((q) => ({
+        stem: q.stem || '',
+        options: q.options || {},
+        answer: q.answer || '',
+      }));
+      try {
+        const r = await model.verifyAnswers(modelConfig(), list);
+        return { ok: true, ...r };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    },
     'capture:readClipboardImage': () => ({ ok: false, error: '该功能需要外壳支持，请使用文件选择' }),
     /** 外壳注入能力：浏览器外壳用文件对话框上传的图片走这里；Electron 走 IPC。 */
     'shell:pickImage': (payload = {}) => ({ ok: true, files: payload.files || [] }),

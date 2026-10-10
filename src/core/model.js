@@ -10,7 +10,14 @@
  * 只依赖 fetch 与 base64 编解码，因此主进程和渲染进程都能用，也便于用假服务器单测。
  */
 
-const { buildVisionPrompt, buildAnalysisPrompt, parseExtraction, extractJson } = require('./extract.js');
+const {
+  buildVisionPrompt,
+  buildAnalysisPrompt,
+  buildSolverPrompt,
+  crossCheckAnswers,
+  parseExtraction,
+  extractJson,
+} = require('./extract.js');
 
 const DEFAULT_CONFIG = {
   baseUrl: 'https://api.deepseek.com',
@@ -185,6 +192,83 @@ async function analyzeQuestion(config, question) {
 }
 
 /**
+ * 抗干扰核对：让模型**独立做一遍**这些题，再与识别出的答案比对。
+ *
+ * 为什么需要：读图会认错答案（B 认成 8、答案栏串行），而模型自己判断也可能判错。
+ * 这里的关键是"独立性" —— 请求里**不带图片、不带已识别的答案**，
+ * 只给题干与选项，逼模型真的把题做一遍。
+ * 两条独立路径结果不一致的题会被标成 conflict，交给用户核对。
+ *
+ * @param {object} config
+ * @param {Array<{stem:string, options:object, answer?:string}>} questions
+ * @returns {Promise<{items:Array, agreed:number, conflicts:number, unknown:number, checked:number, error?:string}>}
+ */
+async function verifyAnswers(config, questions) {
+  const cfg = { ...DEFAULT_CONFIG, ...config };
+  const list = (questions || []).filter((q) => q && q.stem && Object.keys(q.options || {}).length >= 2);
+  const items = list.map((q, index) => ({ index, question: q }));
+
+  if (items.length === 0) {
+    return { items: [], agreed: 0, conflicts: 0, unknown: 0, checked: 0 };
+  }
+  // 配置了 Key 才可能调用；本地服务（Ollama）不需要 Key
+  if (!cfg.apiKey && !/^https?:\/\/(127\.0\.0\.1|localhost)/.test(cfg.baseUrl || '')) {
+    return {
+      items: items.map((it) => ({
+        index: it.index,
+        independent: '',
+        status: 'unknown',
+        message: '未配置模型，无法独立核对',
+        suggestion: '请自己确认答案',
+      })),
+      agreed: 0,
+      conflicts: 0,
+      unknown: items.length,
+      checked: 0,
+      error: '未配置文本模型，无法自动核对答案',
+    };
+  }
+
+  const out = [];
+  for (const it of items) {
+    try {
+      const raw = await chat(cfg, [{ role: 'user', content: buildSolverPrompt(it.question) }], { json: true });
+      const json = extractJson(raw) || {};
+      let independent = String(json.answer ?? '').trim();
+      // 模型可能返回选项原文而不是字母
+      if (!/^[A-F]$/i.test(independent)) {
+        const hit = Object.entries(it.question.options || {}).find(
+          ([, v]) => String(v).trim() === independent.trim(),
+        );
+        independent = hit ? hit[0] : '';
+      }
+      const letters = Object.keys(it.question.options || {});
+      if (independent && !letters.includes(independent.toUpperCase())) independent = '';
+      independent = independent.toUpperCase();
+
+      const c = crossCheckAnswers(it.question.answer, independent);
+      out.push({ index: it.index, independent, reason: String(json.reason ?? '').trim(), ...c });
+    } catch (e) {
+      out.push({
+        index: it.index,
+        independent: '',
+        status: 'unknown',
+        message: `核对失败：${e.message}`,
+        suggestion: '请自己确认答案',
+      });
+    }
+  }
+
+  return {
+    items: out,
+    agreed: out.filter((x) => x.status === 'agree').length,
+    conflicts: out.filter((x) => x.status === 'conflict').length,
+    unknown: out.filter((x) => x.status === 'unknown').length,
+    checked: out.length,
+  };
+}
+
+/**
  * 批量识别知识点。
  * 设计：本地规则先给出确定的标签，模型只做**追加**。
  * 分批调用（每批 10 题）并逐批容错 —— 某一批失败不该让整次录入白做。
@@ -282,6 +366,7 @@ module.exports = {
   chat,
   extractQuestionsFromImage,
   analyzeQuestion,
+  verifyAnswers,
   detectKnowledgePoints,
   explainWords,
   testConnection,

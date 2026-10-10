@@ -208,3 +208,33 @@ test('回收站：能看、能恢复、能彻底清空', () => {
   assert.ok(/trash:empty/.test(html), '应能清空回收站');
   assert.ok(/id="trashPickAll"/.test(html), '回收站应支持全选');
 });
+
+test('抗干扰核对：有「核对答案」入口，且冲突题会被显著标出', () => {
+  assert.ok(/id="verifyBtn"/.test(html), '应有「核对答案」按钮');
+  assert.ok(/capture:verifyAnswers/.test(html), '应调用核对接口');
+  assert.ok(/id="verifyOut"/.test(html), '应有核对结果区域');
+  assert.ok(/verifyMap/.test(html), '应保存每道题的核对结果');
+  assert.ok(/function verifyBadge/.test(html), '应有核对标记的渲染');
+
+  // 冲突必须显眼、且必须要求用户核对（不能替他决定用哪个答案）
+  const badge = html.slice(html.indexOf('function verifyBadge'), html.indexOf('function verifyBadge') + 1200);
+  assert.ok(/conflict/.test(badge), '应区分冲突状态');
+  assert.ok(/答案可能不对/.test(badge), '冲突提示应醒目');
+  assert.ok(/核对/.test(badge), '冲突时应要求人工核对');
+  assert.ok(/agree/.test(badge), '应区分一致状态');
+});
+
+test('抗干扰核对：界面明确说明"答案不一定对"，并承诺不改答案', () => {
+  assert.ok(/答案不一定对/.test(html), '界面应明确提示答案可能被认错');
+  assert.ok(/不带图片|不看原答案/.test(html), '应说明核对方式（独立重做）');
+  // 核对不得自动修改答案：只标出冲突
+  const handler = html.slice(html.indexOf("$('#verifyBtn').onclick"), html.indexOf("$('#verifyBtn').onclick") + 2600);
+  assert.ok(!/q\.answer\s*=\s*item\.independent/.test(handler), '核对不该自动把答案改成独立作答结果');
+  assert.ok(/verifyMap\[realIdx\]/.test(handler), '应按下标映射回正确的题');
+});
+
+test('抗干扰核对：换批次时要清掉上一轮的核对标记', () => {
+  // 下标含义会随新批次改变，不清空会把标记串到别的题上
+  assert.ok(/keepVerify/.test(html), 'renderReview 应支持保留/清空核对结果');
+  assert.ok(/if \(!keepVerify\) verifyMap = \{\}/.test(html), '默认应清空核对结果');
+});

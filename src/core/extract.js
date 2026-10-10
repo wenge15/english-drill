@@ -232,6 +232,81 @@ function buildAnalysisPrompt(question) {
   ].join('\n');
 }
 
+/**
+ * 独立作答提示词 —— 抗干扰核对的第一半。
+ *
+ * 关键设计：**故意只给题干和选项，不给图片、也不给任何已识别出的答案**。
+ * 模型必须靠自己把题做一遍。
+ *
+ * 为什么要这样：读图会认错答案（把 B 认成 8、把答案栏串行），
+ * 而模型自己判断也可能判错。让两条**互相独立**的路径各出一个答案，
+ * 一致才基本可信，不一致就交给用户核对 —— 这比任何单边自信都可靠。
+ * 如果这里把"已识别答案"喂进去，模型会顺着它走，核对就失去意义了。
+ */
+function buildSolverPrompt(question) {
+  const optionsText = Object.entries(question.options || {})
+    .map(([k, v]) => `${k}. ${v}`)
+    .join('\n');
+  return [
+    '你是英语老师。独立完成下面这道英语单选题，给出你认为正确的答案。',
+    '注意：不要假设题目有标准答案提示，只凭题干与选项判断。',
+    '只输出一个 JSON 对象，不要代码块。',
+    '',
+    `题干：${question.stem}`,
+    '选项：',
+    optionsText,
+    '',
+    '输出格式：',
+    JSON.stringify({ answer: 'B', reason: '一句话说明判断依据' }),
+    '',
+    '如果你认为题目不完整或有多个选项都成立，把 answer 设为空字符串并在 reason 里说明。',
+  ].join('\n');
+}
+
+/**
+ * 比对两个独立来源的答案。
+ *
+ * @param {string} fromSource 从图片/文本里识别出来的答案
+ * @param {string} independent 模型独立作答得出的答案
+ * @returns {{status:'agree'|'conflict'|'unknown', message:string, suggestion:string}}
+ *   - agree    两边一致，基本可信
+ *   - conflict 两边不一致，**必须人工核对**（这是本功能的主要产出）
+ *   - unknown  有一边没给出答案，无法判断
+ */
+function crossCheckAnswers(fromSource, independent) {
+  const a = String(fromSource || '').trim().toUpperCase();
+  const b = String(independent || '').trim().toUpperCase();
+  const valid = (x) => /^[A-F]$/.test(x);
+
+  if (!valid(a) && !valid(b)) {
+    return { status: 'unknown', message: '两边都没给出明确答案', suggestion: '请自己确认答案' };
+  }
+  if (!valid(a)) {
+    return {
+      status: 'unknown',
+      message: `识别到的答案不可用，独立作答得出 ${b}`,
+      suggestion: `可以参考 ${b}，但请自己确认`,
+    };
+  }
+  if (!valid(b)) {
+    return {
+      status: 'unknown',
+      message: `独立作答没能给出答案（识别到的是 ${a}）`,
+      suggestion: `请自己确认，不要直接采信 ${a}`,
+    };
+  }
+  if (a === b) {
+    return { status: 'agree', message: `识别答案与独立作答一致（都是 ${a}）`, suggestion: '' };
+  }
+  return {
+    status: 'conflict',
+    // 冲突时**不替用户决定**用哪个：识别的可能对（模型做题也会错），
+    // 独立的也可能对（印在卷面上的答案也常被认错）。只把事实摆出来。
+    message: `识别到的答案是 ${a}，但模型独立做这道题得出 ${b}`,
+    suggestion: '两者不一致，请核对原卷后手动选择答案',
+  };
+}
+
 /** 把识别结果转成入库前的校验结论：哪些能存，哪些必须人工改。 */
 function validateForSave(question) {
   const errors = [];
@@ -266,6 +341,8 @@ module.exports = {
   parseExtraction,
   buildVisionPrompt,
   buildAnalysisPrompt,
+  buildSolverPrompt,
+  crossCheckAnswers,
   validateForSave,
   stemFingerprint,
 };
