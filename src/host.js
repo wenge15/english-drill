@@ -405,6 +405,76 @@ function createHost(opts) {
     },
     'settings:dataDir': () => ({ ok: true, dataDir, imagesDir }),
 
+    // ---------- 格式化数据库 ----------
+    /**
+     * 预览格式化会删掉什么。
+     * 这个动作**不改任何数据**，只报告代价，供界面在执行前展示。
+     */
+    'db:resetPreview': () => ({ ok: true, ...repo.resetPreview() }),
+
+    /**
+     * 执行格式化：清空题库、做题记录、分组、问答。
+     *
+     * 三重防护，因为这个操作**不可逆**：
+     *   1. 必须显式传确认词 confirm='格式化' —— 靠界面上手输，不是点两下就过
+     *   2. 不传 confirm 时返回预览而不是执行，避免调用方误以为已经清了
+     *   3. 数据层用事务包起来，中途出错整体回滚
+     *
+     * 刻意保留的东西（否则用户会白白丢配置）：
+     *   - settings：每日题量、乱序开关等偏好
+     *   - data/config.json：API Key 与模型配置
+     *   - data/.shell-token：桌面快捷方式依赖它
+     */
+    'db:reset': ({ confirm, clearImages = true } = {}) => {
+      const WORD = '格式化';
+      if (confirm !== WORD) {
+        const p = repo.resetPreview();
+        return {
+          ok: false,
+          needConfirm: true,
+          error: `这是不可逆操作，请输入确认词「${WORD}」后重试`,
+          preview: p,
+        };
+      }
+      const before = repo.resetPreview();
+      let deleted;
+      try {
+        deleted = repo.resetAll();
+      } catch (e) {
+        return { ok: false, error: `格式化失败（已回滚，数据未受影响）：${e.message}` };
+      }
+      // 题目配图也一并清掉：留着只会白占磁盘，而题目已经没了
+      let imagesRemoved = 0;
+      if (clearImages) {
+        try {
+          for (const f of fs.readdirSync(imagesDir)) {
+            const p = path.join(imagesDir, f);
+            if (fs.statSync(p).isFile()) {
+              fs.unlinkSync(p);
+              imagesRemoved += 1;
+            }
+          }
+        } catch {
+          /* 图片目录不存在或删不掉都不影响主体功能 */
+        }
+      }
+      const after = repo.countQuestions();
+      return {
+        ok: true,
+        deleted: deleted.deleted,
+        total: deleted.total,
+        imagesRemoved,
+        before,
+        after,
+        message:
+          `已清空 ${before.counts.questions} 道题、${before.counts.groups} 个分组、` +
+          `${before.counts.attempts} 条作答记录` +
+          (imagesRemoved ? `、${imagesRemoved} 张配图` : '') +
+          '。设置与 API Key 保留。',
+      };
+    },
+
+
     // ---------- 文本导入（主路径：把题目文本直接粘进来） ----------
     /**
      * 只解析不入库，让用户先在界面上核对修改。

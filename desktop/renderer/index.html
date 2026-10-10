@@ -1560,7 +1560,87 @@ screens.settings = async () => {
         <button class="btn ghost" id="openDir">打开数据目录</button>
         <span class="muted" style="font-size:12.5px">备份就是拷走这个目录。</span>
       </div>
+    </div>
+
+    <div class="card" id="dangerZone" style="border-color:#5c2b22">
+      <h2 class="crit">格式化（清空数据）</h2>
+      <div class="sub" style="margin-bottom:10px">
+        清空<b>题库、做题记录、分组、问答记录</b>，回到全新状态。
+        <b class="crit">不可撤销</b>，也没有回收站。适合"想重新开始"或把软件给别人前抹掉自己的数据。
+      </div>
+      <div id="resetPreviewBox" class="muted" style="font-size:12.5px">正在统计要清除的数据…</div>
+      <div class="hintbox" style="margin:12px 0">
+        <b>会保留</b>：每日题量、乱序开关等设置，以及 API Key 和模型配置 —— 不用重新配一遍。
+      </div>
+      <div class="row" style="align-items:flex-end">
+        <label class="fld" style="flex:1;min-width:220px;margin-bottom:0">
+          <span>请输入确认词「格式化」以启用按钮</span>
+          <input type="text" id="resetConfirm" placeholder="格式化" autocomplete="off" />
+        </label>
+        <button class="btn danger" id="resetBtn" disabled>清空全部数据</button>
+      </div>
     </div>`;
+
+  /* ---------- 格式化（清空数据）：先看代价，再输确认词 ---------- */
+  const refreshResetPreview = async () => {
+    const p = await INVOKE('db:resetPreview');
+    const box = $('#resetPreviewBox');
+    if (!p.ok) {
+      box.innerHTML = '<span class="crit">无法读取数据统计</span>';
+      return;
+    }
+    const c = p.counts;
+    if (p.total === 0) {
+      box.innerHTML = '当前没有数据，无需格式化。';
+      $('#resetBtn').disabled = true;
+      return;
+    }
+    // 把"要删什么、各多少"如实列出来 —— 用户得看清代价才能决定
+    const parts = [
+      ['题目', c.questions],
+      ['分组', c.groups],
+      ['练习场次', c.sessions],
+      ['作答记录', c.attempts],
+      ['问答消息', c.chat_messages],
+    ].filter(([, n]) => n > 0);
+    box.innerHTML = `将清除：${parts.map(([l, n]) => `<b>${n}</b> ${l}`).join('、')}（共 <b>${p.total}</b> 条记录）。`;
+  };
+
+  // 只有输入了正确的确认词，按钮才可用
+  const RESET_WORD = '格式化';
+  $('#resetConfirm').oninput = (e) => {
+    $('#resetBtn').disabled = e.target.value !== RESET_WORD;
+  };
+
+  $('#resetBtn').onclick = async () => {
+    const word = $('#resetConfirm').value;
+    if (word !== RESET_WORD) return toast(`请输入确认词「${RESET_WORD}」`, 'err');
+    // 第二道确认：把代价再说一遍，避免"手比脑快"
+    const p = await INVOKE('db:resetPreview');
+    const c = p.counts || {};
+    const warn = [
+      '确定要清空全部数据吗？此操作不可撤销，也没有回收站。',
+      '',
+      `· 题目 ${c.questions || 0} 道`,
+      `· 分组 ${c.groups || 0} 个`,
+      `· 练习场次 ${c.sessions || 0} 次`,
+      `· 作答记录 ${c.attempts || 0} 条`,
+      `· 问答消息 ${c.chat_messages || 0} 条`,
+      '',
+      '会保留：设置、API Key、模型配置。',
+      '',
+      '如果只是想删掉几道题，请到「题库管理」里操作，那里有回收站。',
+    ].join('\n');
+    if (!confirm(warn)) return;
+
+    const r = await INVOKE('db:reset', { confirm: word, clearImages: true });
+    if (!r.ok) return toast(r.error, 'err');
+    toast(r.message, 'okc');
+    // 清完重建设置页，让统计归零
+    go('settings');
+  };
+
+  await refreshResetPreview();
 
   $('#presets').innerHTML = Object.entries(s.presets).map(([k, p]) =>
     `<button class="btn ghost" data-p="${k}" style="font-size:12.5px">${esc(p.label)}</button>`).join('');

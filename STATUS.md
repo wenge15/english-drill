@@ -27,28 +27,31 @@
 ## 二、测试情况
 
 ```bash
-npm test           # 228 项，13 个测试文件
-npm run test:http  # 54 项端到端（需先起服务）
+npm test           # 241 项，14 个测试文件
+npm run test:http  # 61 项端到端（需先起服务）
 ```
 
-合计 **282 项断言**。
+合计 **302 项断言**。
 
 | 测试文件 | 项数 | 覆盖内容 |
 |---|---|---|
 | `test/srs.test.js` | 15 | 遗忘曲线、间隔计算、难度更新、队列构建 |
 | `test/extract.test.js` | 17 | 读图结果解析与归一化 |
+| `test/extract.test.js` | 21 | 读图结果解析、独立作答提示词、答案比对 |
+| `test/srs.test.js` | 15 | 遗忘曲线、间隔计算、难度更新、队列构建 |
 | `test/textparse.test.js` | 18 | 文本导入：选项切分、答案识别、答案表 |
 | `test/knowledge.test.js` | 28 | 知识点识别与易误判边界 |
 | `test/glossary.test.js` | 11 | 释义库：常用义、熟词生义、语境义、短语释疑 |
-| `test/db.test.js` | 14 | 数据层、查重、迁移 |
+| `test/db.test.js` | 15 | 数据层、查重、迁移 |
 | `test/group-sprint.test.js` | 19 | 单元分组、集训排期、老库迁移 |
-| `test/bulk-delete.test.js` | 10 | 批量归档/彻底删除、回收站、删除影响预估 |
-| `test/model.test.js` | 16 | 模型适配层（含假服务器） |
+| `test/bulk-delete.test.js` | 11 | 批量归档/彻底删除、回收站、删除影响预估 |
+| `test/reset.test.js` | 11 | 格式化：清空范围、保留项、确认词防护 |
+| `test/model.test.js` | 28 | 模型适配层、抗干扰核对（含假服务器） |
 | `test/flow.test.js` | 11 | 端到端业务流程 |
-| `test/ui.test.js` | 17 | 界面静态检查（结构、约束、入口） |
+| `test/ui.test.js` | 22 | 界面静态检查（结构、约束、入口、危险操作防护） |
 | `test/shuffle.test.js` | 12 | 乱序的确定性 |
-| `test/teach-chat.test.js` | 14 | 讲评、问答上下文、词汇题释义合并 |
-| `test/http.test.js` | 42 | HTTP 外壳端到端 |
+| `test/teach-chat.test.js` | 19 | 讲评、问答上下文、词汇题释义、预置校准 |
+| `test/http.test.js` | 61 | HTTP 外壳端到端（含安全与危险操作防护） |
 
 `test/run-all.js` 会自动发现所有 `*.test.js`，新增测试不用手动注册。
 

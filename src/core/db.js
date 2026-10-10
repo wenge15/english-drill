@@ -1139,6 +1139,97 @@ function createRepo(dbPath) {
     db.prepare('DELETE FROM chat_threads WHERE id = ?').run(threadId);
   }
 
+  /* ---------------- 格式化（清空数据） ---------------- */
+
+  /**
+   * 会被"格式化"清空的表，按删除顺序排列。
+   *
+   * 顺序是从"最依赖别人"到"最被依赖"：
+   *   chat_messages → chat_threads（消息挂在会话下）
+   *   attempts / practice_questions（挂在题目与会话下）
+   *   sessions（练习场次）
+   *   questions（题目）
+   *   groups（分组，题目引用它）
+   *
+   * **settings 刻意不在列表里** —— 里面是每日题量、乱序开关等偏好。
+   * API Key 也不在数据库里（在 data/config.json），格式化不会碰它。
+   */
+  const RESET_TABLES = [
+    'chat_messages',
+    'chat_threads',
+    'attempts',
+    'practice_questions',
+    'sessions',
+    'questions',
+    'groups',
+  ];
+
+  /**
+   * 预览"格式化会删掉什么"。
+   * 先给用户看清代价，再去执行 —— 这功能不可逆，必须先告知。
+   */
+  function resetPreview() {
+    const counts = {};
+    let total = 0;
+    for (const t of RESET_TABLES) {
+      let n = 0;
+      try {
+        n = db.prepare(`SELECT COUNT(*) c FROM ${t}`).get().c;
+      } catch {
+        n = 0;
+      }
+      counts[t] = n;
+      total += n;
+    }
+    return {
+      counts,
+      total,
+      // 给界面用的中文标签，避免界面自己维护一份表名映射
+      labels: {
+        questions: '题目',
+        groups: '分组',
+        sessions: '练习场次',
+        practice_questions: '练习明细',
+        attempts: '作答记录',
+        chat_threads: '问答会话',
+        chat_messages: '问答消息',
+      },
+    };
+  }
+
+  /**
+   * 清空数据。**不可逆**。
+   *
+   * 用事务包起来：中途出错就整体回滚，不会留下"删了一半"的残局
+   * （半清空的库比没清更难收拾）。
+   */
+  function resetAll() {
+    const preview = resetPreview();
+    db.exec('BEGIN');
+    try {
+      for (const t of RESET_TABLES) {
+        db.prepare(`DELETE FROM ${t}`).run();
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        /* 回滚失败也要把原始错误抛出去 */
+      }
+      throw e;
+    }
+    // 清空后把自增序列也归零，让新库的 id 从 1 开始（更像"全新"）
+    try {
+      for (const t of RESET_TABLES) {
+        db.prepare('DELETE FROM sqlite_sequence WHERE name = ?').run(t);
+      }
+    } catch {
+      /* 没有 sqlite_sequence（表没用 AUTOINCREMENT）不影响 */
+    }
+    return { deleted: preview.counts, total: preview.total };
+  }
+
   return {
     raw: db,
     saveQuestion,
@@ -1179,6 +1270,8 @@ function createRepo(dbPath) {
     threadMessages,
     listThreads,
     deleteThread,
+    resetPreview,
+    resetAll,
     getSetting,
     setSetting,
     allSettings,

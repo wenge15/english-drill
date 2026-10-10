@@ -238,6 +238,29 @@ A. completes  B. completed  C. was completed  D. has completed
   const noIds = await invoke('questions:bulkDelete', { ids: [] });
   check('没选中任何题时报错而不是误删', noIds.ok === false, JSON.stringify(noIds).slice(0, 120));
 
+  console.log('\n[HTTP 外壳] 格式化（清空数据）');
+  // 注意：**只验证防护逻辑，不真的清空**。
+  // 这个实例连着用户的真实题库，跑一次就会把数据抹掉。
+  const resetPreview = await invoke('db:resetPreview');
+  check('预览接口可用', resetPreview.ok === true && typeof resetPreview.counts === 'object',
+    JSON.stringify(resetPreview).slice(0, 160));
+  check('预览不改动数据', resetPreview.ok === true, '预览是只读动作');
+
+  const noWord = await invoke('db:reset', {});
+  check('没传确认词被拦住', noWord.ok === false && noWord.needConfirm === true,
+    JSON.stringify(noWord).slice(0, 120));
+  check('拦住时返回预览（让界面能展示代价）', Boolean(noWord.preview), JSON.stringify(noWord).slice(0, 160));
+
+  const wrongWord = await invoke('db:reset', { confirm: '确定' });
+  check('错误的确认词被拦住', wrongWord.ok === false, JSON.stringify(wrongWord).slice(0, 120));
+  const spacedWord = await invoke('db:reset', { confirm: ' 格式化 ' });
+  check('确认词带空格也不通过', spacedWord.ok === false, JSON.stringify(spacedWord).slice(0, 120));
+
+  // 确认数据确实没被这些试探动作清掉
+  const afterProbe = await invoke('questions:counts');
+  check('多次试探后数据仍在', afterProbe.ok === true && afterProbe.counts.total > 0,
+    `题库 ${afterProbe.counts?.total} 题`);
+
   console.log(`\n${failures === 0 ? 'HTTP 外壳全部通过' : `有 ${failures} 项失败`}\n`);
   process.exit(failures === 0 ? 0 : 1);
 }

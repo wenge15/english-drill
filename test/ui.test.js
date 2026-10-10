@@ -238,3 +238,26 @@ test('抗干扰核对：换批次时要清掉上一轮的核对标记', () => {
   assert.ok(/keepVerify/.test(html), 'renderReview 应支持保留/清空核对结果');
   assert.ok(/if \(!keepVerify\) verifyMap = \{\}/.test(html), '默认应清空核对结果');
 });
+
+test('格式化：在设置页有危险区，且必须先输入确认词才能点', () => {
+  assert.ok(/id="dangerZone"/.test(html), '应有危险区卡片');
+  assert.ok(/id="resetConfirm"/.test(html), '应有确认词输入框');
+  assert.ok(/id="resetBtn"/.test(html), '应有清空按钮');
+  assert.ok(/id="resetPreviewBox"/.test(html), '应有"要删什么"的预览区');
+  // 按钮默认禁用，且只在确认词完全匹配时才启用（防手滑）
+  assert.ok(/id="resetBtn" disabled/.test(html), '清空按钮默认必须是禁用的');
+  assert.ok(/const RESET_WORD = '格式化'/.test(html), '确认词应为「格式化」');
+  assert.ok(/resetBtn'\)\.disabled = e\.target\.value !== RESET_WORD/.test(html), '只有确认词匹配才启用');
+  // 第二次确认要如实列出代价，并提示常规删题有回收站
+  assert.ok(/不可撤销/.test(html), '必须写明不可撤销');
+  assert.ok(/如果只是想删掉几道题/.test(html), '应引导用户去用有回收站的常规删除');
+});
+
+test('格式化：界面如实列出要清除的数量，并说明保留了什么', () => {
+  assert.ok(/db:resetPreview/.test(html), '应调用预览接口');
+  assert.ok(/将清除：/.test(html), '应列出将清除的数量');
+  assert.ok(/会保留/.test(html), '应说明保留了什么（否则用户以为配置也会丢）');
+  assert.ok(/API Key/.test(html), '应明确 API Key 会保留');
+  // 预览为 0 时不该让用户做无意义的操作
+  assert.ok(/当前没有数据，无需格式化/.test(html), '没数据时应说明无需格式化');
+});
