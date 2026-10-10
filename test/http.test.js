@@ -35,6 +35,42 @@ async function main() {
   });
   check('缺 token 的接口调用被拒绝（403）', noToken.status === 403, `实际 ${noToken.status}`);
 
+  // ---- 安全：公开页面不得携带 token ----
+  // 踩过的坑：bridge 曾经把真实 token 内联进 index.html，而 `/` 是免校验的公开路径，
+  // 于是本机任意进程 `GET /` 就能抓走 token，再拿去消耗用户的模型额度。
+  console.log('\n[HTTP 外壳] 公开页不得泄露 token');
+  const pageNoToken = await fetch(`${BASE}/`);
+  const pageBody = await pageNoToken.text();
+  check('公开页可访问（不需要 token）', pageNoToken.status === 200, `实际 ${pageNoToken.status}`);
+  check('公开页里不含真实 token', !pageBody.includes(token), '页面里出现了 token 字面量');
+  check('公开页里没有内联的 x-dsh-token 值', !/x-dsh-token['"]?\s*:\s*['"][a-f0-9]{16,}/.test(pageBody));
+  check('桥改为从地址栏读取 token', /URLSearchParams\(location\.search\)/.test(pageBody), '应使用 location.search 取 token');
+  check('取到后存入 sessionStorage（刷新不丢）', /sessionStorage/.test(pageBody));
+
+  // 带 token 打开时，页面本身仍不应包含 token
+  const pageWithToken = await fetch(url);
+  const pageWithTokenBody = await pageWithToken.text();
+  check('带 token 打开页面时，页面源码里也没有 token', !pageWithTokenBody.includes(token));
+
+  // ---- 健壮性：畸形请求不得打死服务 ----
+  // 踩过的坑：`new URL(req.url, ...)` 对 `//[` 抛异常，且在 token 校验之前、
+  // 无人捕获，直接把整个服务进程打死（本机任意程序都能做到）。
+  console.log('\n[HTTP 外壳] 畸形请求不得打死服务');
+  for (const badPath of ['//[', '/%', '/..%2f..', '//%5B']) {
+    let status = 0;
+    let threw = false;
+    try {
+      const r = await fetch(`${BASE}${badPath}`);
+      status = r.status;
+    } catch {
+      threw = true;
+    }
+    check(`畸形路径 ${badPath} 得到响应而不是崩溃`, !threw && status >= 200 && status < 500, threw ? '连接被重置' : `实际 ${status}`);
+  }
+  // 服务还活着吗
+  const stillAlive = await fetch(`${BASE}/api/health`);
+  check('畸形请求之后服务仍然存活', stillAlive.status === 200, `实际 ${stillAlive.status}`);
+
   const invoke = async (channel, args = {}) => {
     const r = await fetch(`${BASE}/api/invoke`, {
       method: 'POST',
@@ -48,7 +84,11 @@ async function main() {
   const page = await fetch(url).then((r) => r.text());
   check('界面能正常返回', page.includes('<!DOCTYPE html>') && page.includes('英语练习'));
   check('注入了 window.dsh 桥', page.includes('window.dsh ='));
-  check('桥里带上了 token', page.includes(token));
+  // 这条以前写反了：原来是 check('桥里带上了 token', page.includes(token))，
+  // 等于把"公开页泄露 token"这个漏洞当成期望行为锁住了。
+  // 正确的不变量是：**任何返回给浏览器的 HTML 都不能含 token**。
+  check('桥里不得内联 token（安全不变量）', !page.includes(token), '页面里出现了 token');
+  check('桥从地址栏/sessionStorage 取 token', /sessionStorage/.test(page));
   check('桥用 HTTP 实现 invoke', page.includes("/api/invoke"));
 
   console.log('\n[HTTP 外壳] 核心动作');

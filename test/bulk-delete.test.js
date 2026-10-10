@@ -122,25 +122,69 @@ test('彻底删除：集训计划里也不该再出现已删除的错题', () =>
   repo.close();
 });
 
-test('彻底删除：一起删掉围绕这道题的问答记录', () => {
+test('彻底删除：一起删掉围绕这道题的问答记录（线程消息都要清）', () => {
   const repo = freshRepo();
   const ids = addQuestions(repo, 2, 'ChatDel');
   const t1 = repo.ensureThread({ questionId: ids[0] });
   repo.addChatMessage(t1.id, 'user', '这道题怎么理解？');
+  repo.addChatMessage(t1.id, 'assistant', '这道题考的是……');
   const t2 = repo.ensureThread({ questionId: ids[1] });
   repo.addChatMessage(t2.id, 'user', '另一道题');
 
-  repo.deleteQuestions([ids[0]]);
-  const threads = repo.listThreads();
-  assert.strictEqual(threads.length, 1, '被删题的对话也应清理');
-  assert.strictEqual(threads[0].questionId, ids[1]);
-
-  // 通用对话（不绑定题目）不该被误删
+  const msgCount = () => repo.raw.prepare('SELECT COUNT(*) c FROM chat_messages').get().c;
+  // 通用对话（不绑定题目）不该被误删，先建一条作为对照
   const general = repo.ensureThread({});
   repo.addChatMessage(general.id, 'user', '泛问语法');
+  const before = msgCount();
+  assert.strictEqual(before, 4, `删除前应有 4 条消息，实际 ${before}`);
+
+  const r = repo.deleteQuestions([ids[0]]);
+
+  // 关键断言：消息必须一起删掉。
+  // 踩过的坑：以前只删了 chat_threads，没删 chat_messages，
+  // 于是"已删除题目的聊天内容"永久留在库里（没有外键级联），数据库无限增长。
+  const after = msgCount();
+  assert.strictEqual(after, 2, `删题应连带删掉它的 2 条消息，实际还剩 ${after} 条`);
+  assert.strictEqual(r.messagesDeleted, 2, '返回结果里要报告删了几条消息');
+
+  const threads = repo.listThreads();
+  // 删掉 ids[0] 后应剩两个线程：ids[1] 的 + 通用对话
+  assert.strictEqual(threads.length, 2, `应剩 2 个线程，实际 ${threads.length}`);
+  assert.ok(threads.some((t) => t.questionId === ids[1]), '另一道题的对话要保留');
+  assert.ok(!threads.some((t) => t.questionId === ids[0]), '被删题的对话要清掉');
+
+  // 通用对话的消息必须完好
+  const generalMsgs = repo.listMessages
+    ? repo.listMessages(general.id).length
+    : repo.raw.prepare('SELECT COUNT(*) c FROM chat_messages WHERE thread_id = ?').get(general.id).c;
+  assert.strictEqual(generalMsgs, 1, '不绑定题目的对话消息必须保留');
+
   repo.deleteQuestions([ids[1]]);
-  const after = repo.listThreads();
-  assert.ok(after.some((t) => t.id === general.id), '不绑定题目的对话必须保留');
+  const after2 = msgCount();
+  assert.strictEqual(after2, 1, '删第二道题后只剩通用对话那 1 条');
+  const finalThreads = repo.listThreads();
+  assert.ok(finalThreads.some((t) => t.id === general.id), '不绑定题目的对话必须保留');
+  repo.close();
+});
+
+test('彻底删除：库里不该残留任何孤儿聊天消息', () => {
+  const repo = freshRepo();
+  const ids = addQuestions(repo, 3, 'Orphan');
+  for (const id of ids) {
+    const th = repo.ensureThread({ questionId: id });
+    repo.addChatMessage(th.id, 'user', `问题 ${id}`);
+  }
+  repo.deleteQuestions(ids);
+
+  // 孤儿 = 消息所属的线程已经不存在
+  const orphans = repo.raw
+    .prepare(
+      `SELECT COUNT(*) c FROM chat_messages m
+       WHERE NOT EXISTS (SELECT 1 FROM chat_threads t WHERE t.id = m.thread_id)`,
+    )
+    .get().c;
+  assert.strictEqual(orphans, 0, `不该有孤儿消息，实际 ${orphans} 条`);
+  assert.strictEqual(repo.raw.prepare('SELECT COUNT(*) c FROM chat_messages').get().c, 0);
   repo.close();
 });
 

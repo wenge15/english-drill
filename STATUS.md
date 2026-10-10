@@ -235,29 +235,32 @@ Windows 会把某些端口段保留给 Hyper-V/WSL，这是个真实且常见的
 
 #### 已确认、尚未修（2026-10-09 复查，按影响排序）
 
-1. **认证 token 会随公开页面泄露** —— `src/shell-server.js:89` 把 `/`、`/index.html`
-   放进 `PUBLIC_PATHS`，不需要 token 就能取；而 `:152` 注入 bridge 时又把真实 token
-   写进这份 HTML（`'x-dsh-token': '<token>'`）。本机任意进程 `GET /` 抓走 token 后，
-   即可调用 `/api/invoke` 花用户额度。**修法**：公开页不下发 token，页面改从
-   `location.search` 读取。
-2. **畸形请求目标会把服务进程打死** —— `src/shell-server.js:84` 的
-   `new URL(req.url, ...)` 没有 try/catch，而且在 token 校验**之前**执行；
-   `GET //[` 会抛 `Invalid URL`。`src/shell-http.js` / `src/launcher.js` 又没有
-   `unhandledRejection` 兜底。**修法**：包一层 try/catch，返回 400。
-3. **「彻底删除」会留下聊天记录** —— `src/core/db.js:422-424` 的 `deleteQuestions`
-   删了 `attempts` / `practice_questions` / `chat_threads`，却没有删 `chat_messages`
-   （对比 `deleteThread` 在 `:1123` 是删干净的），库里也没有外键级联。
-   被删题目对应的聊天内容会一直留着，库无限增长。**修法**：一并清 `chat_messages`。
-4. **错题本不淘汰已掌握的题** —— `src/core/db.js:1041` 的 `wrongBook` 只要错过一次
-   就永久保留；而 `sprintStatus` 在 `:1030` 已有 `conquered = reps > 0 && streak >= 2`
+4. **错题本不淘汰已掌握的题** —— `src/core/db.js` 的 `wrongBook` 只要错过一次
+   就永久保留；而 `sprintStatus` 已有 `conquered = reps > 0 && streak >= 2`
    的判定（定义为"最后一次作答之后连续答对，且稳定度足够"）。**修法**：错题本复用
    这个判定，掌握后不再列出（或加"只看未掌握"开关）。
+   *待产品决定*：可能有人希望错题本保留全部历史。
 5. **（影响有限）深链回看历史会话时，重做对的题仍显示为错题** ——
-   `src/host.js:239` 的 `practice:replay` 按"每次作答"过滤
+   `src/host.js` 的 `practice:replay` 按"每次作答"过滤
    （`r.correct === false`），而不是按"该题最终是否做对"。只有 `#session=` 深链
    回看时可达，正常练习流程不受影响。
 
-### 已修（2026-10-09）
+### 已修（2026-10-09 第二轮）
+
+上面 1-3 三项已修，每项都补了测试：
+
+- **公开页泄露 token**（安全）—— 桥不再内联 token，改从 `location.search` 读取并
+  存入 `sessionStorage`，读完立刻用 `history.replaceState` 把 token 从地址栏抹掉。
+  同时**修正了一条写反的测试**：原来断言 `桥里带上了 token`，等于把漏洞当成期望行为锁住了；
+  现在断言的是"任何返回给浏览器的 HTML 都不能含 token"。
+- **畸形请求打死服务**（健壮性）—— `new URL()` 包进 try/catch，解析失败返回 400。
+  HTTP 测试新增 4 个畸形路径（`//[`、`/%`、`/..%2f..`、`//%5B`）并断言服务存活。
+- **彻底删除残留聊天消息** —— `deleteQuestions` 现在会连带删 `chat_messages`
+  （以前只删了 `chat_threads`，没有外键级联），返回值新增 `messagesDeleted`。
+  新增 2 项测试，其中一项专门断言"库里没有孤儿消息"。
+
+### 已修（2026-10-09 第一轮，由 ExpertKT 提交）
+
 - 集训的每天题量分配：错题超过 `天数 × 每天上限` 时不再把溢出全压在最后一天，
   改为均摊（如 25 题 / 7 天 / 上限 3：旧 3,3,3,3,3,3,7 → 新 4,4,4,4,3,3,3）。
   装得下时仍保持"每天不超过上限、题少时集中在头几天"的旧行为。

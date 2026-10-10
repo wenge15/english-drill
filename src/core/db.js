@@ -421,6 +421,20 @@ function createRepo(dbPath) {
     // 顺序很重要：先删引用，再删题（外键未开启时也要保证不留孤儿）
     db.prepare(`DELETE FROM attempts WHERE question_id IN (${marks})`).run(...clean);
     db.prepare(`DELETE FROM practice_questions WHERE question_id IN (${marks})`).run(...clean);
+
+    // chat_messages 必须显式删：它挂在 chat_threads 下，而这里删 thread 不会级联
+    // （库里没开外键级联约束）。漏删会让"被删题目的聊天内容"永久留在库里，
+    // 数据库无限增长（实测确认过：删题后 chat_messages 仍然有记录）。
+    const messagesDeleted = db
+      .prepare(
+        `SELECT COUNT(*) c FROM chat_messages
+         WHERE thread_id IN (SELECT id FROM chat_threads WHERE question_id IN (${marks}))`,
+      )
+      .get(...clean).c;
+    db.prepare(
+      `DELETE FROM chat_messages
+       WHERE thread_id IN (SELECT id FROM chat_threads WHERE question_id IN (${marks}))`,
+    ).run(...clean);
     db.prepare(`DELETE FROM chat_threads WHERE question_id IN (${marks})`).run(...clean);
     const info = db.prepare(`DELETE FROM questions WHERE id IN (${marks})`).run(...clean);
 
@@ -429,6 +443,7 @@ function createRepo(dbPath) {
       attemptsDeleted,
       practiceRowsDeleted: practiceRows,
       sessionsAffected,
+      messagesDeleted,
     };
   }
 

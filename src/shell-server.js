@@ -81,7 +81,17 @@ function createShell(opts) {
   const appHost = createHost({ dataDir });
 
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    // 解析请求目标必须容错，而且要在做任何事之前。
+    // 踩过的坑：`new URL(req.url, ...)` 对 `//[` 这类畸形路径会抛 Invalid URL；
+    // 这个异常发生在 token 校验之前且没人捕获，直接把整个服务进程打死
+    // —— 本机任意程序发一个畸形请求就能让用户的练习中断。
+    let url;
+    try {
+      url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    } catch {
+      json(res, 400, { ok: false, error: '请求路径不合法' });
+      return;
+    }
     const { pathname } = url;
 
     // 只允许带正确 token 的请求；页面本身与健康检查除外
@@ -143,17 +153,38 @@ function createShell(opts) {
       let body = buf;
       // 把原生浏览器外壳的桥注入页面：window.dsh 用 HTTP 实现，界面代码无需改动
       if (rel === 'index.html') {
+        // token 从**地址栏**读取，绝不写进这份 HTML。
+        //
+        // 踩过的坑：以前这里直接把真实 token 内联成 'x-dsh-token': '<token>'，
+        // 而 `/` 是免校验的公开路径 —— 于是本机任意进程 `GET /` 就能抓走 token，
+        // 再拿去调 /api/invoke 消耗用户的模型额度。
+        // 现在页面自己从 location.search 里取（那是启动器打开时就带上的），
+        // 取到后存进 sessionStorage，后续跳转/刷新也不会丢。
         const bridge = `<script>
-window.dsh = {
-  isElectron: false,
-  invoke: async (channel, payload) => {
-    const r = await fetch('/api/invoke', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-dsh-token': '${token}' },
-      body: JSON.stringify({ channel, args: payload || {} }),
-    });
-    return r.json();
-  },
+(function () {
+  var KEY = 'dsh-token';
+  var fromUrl = new URLSearchParams(location.search).get('token');
+  if (fromUrl) {
+    try { sessionStorage.setItem(KEY, fromUrl); } catch (e) { /* 隐私模式可能拒绝 */ }
+    // 把 token 从地址栏抹掉，避免被截图、被历史记录、被其它页面读到
+    try {
+      var u = new URL(location.href);
+      u.searchParams.delete('token');
+      history.replaceState(null, '', u.pathname + u.search + u.hash);
+    } catch (e) { /* 不支持就算了，不影响使用 */ }
+  }
+  var token = fromUrl;
+  if (!token) { try { token = sessionStorage.getItem(KEY); } catch (e) { token = null; } }
+  window.dsh = {
+    isElectron: false,
+    invoke: async (channel, payload) => {
+      const r = await fetch('/api/invoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-dsh-token': token || '' },
+        body: JSON.stringify({ channel, args: payload || {} }),
+      });
+      return r.json();
+    },
   pickImage: async () => {
     // 浏览器没有系统文件对话框的能力，用隐藏的 file input 实现同样的语义：
     // 渲染层只调用 dsh.pickImage()，不需要知道自己跑在哪种外壳里。
@@ -180,7 +211,8 @@ window.dsh = {
     });
   },
   openDataDir: async () => ({ ok: true, dataDir: ${JSON.stringify(dataDir)} }),
-};
+  };
+})();
 <\/script>`;
         body = Buffer.from(
           buf.toString('utf8').replace('<script>\n\'use strict\';', `${bridge}\n<script>\n'use strict';`),
