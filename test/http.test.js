@@ -7,12 +7,30 @@
  * 所以改用 Node 外壳 + 浏览器窗口。这条路径必须自动化验证到底通不通，
  * 不能靠"应该没问题"。
  *
- * 前置：另开终端跑 node src/shell-http.js
+ * ⚠ 重要设计变更（一次真实事故换来的）：
+ * 这个测试以前连的是用户**正在使用**的服务（127.0.0.1:8899）。
+ * 加入"格式化"接口的测试后，它真的把用户的题库清空了 ——
+ * 因为那个服务用的就是 data/questions.db。
+ *
+ * 现在改为：测试**自己起一个独立外壳**，用临时数据目录、独立端口，
+ * 完整跑鉴权 / 页面 / 核心动作 / 分组 / 集训 / 删除 / 格式化的全部断言。
+ *
+ * 好处有两个：
+ *   1. 不可能再碰到真实数据（数据目录是临时创建、跑完删掉的）
+ *   2. 不需要预先手动启动服务 —— 直接 node test/http.test.js 就能跑
  */
 
-const BASE = process.env.BASE || 'http://127.0.0.1:8899';
 const fs = require('node:fs');
 const path = require('node:path');
+const { createShell, listen } = require('../src/shell-server.js');
+
+// 临时数据目录：与真实 data/ 完全隔离
+const TEST_ROOT = path.join(__dirname, '..', 'data', 'test');
+fs.mkdirSync(TEST_ROOT, { recursive: true });
+const DATA_DIR = fs.mkdtempSync(path.join(TEST_ROOT, 'http-'));
+
+const PORT = Number(process.env.HTTP_TEST_PORT || 8931);
+const BASE = `http://127.0.0.1:${PORT}`;
 
 let failures = 0;
 const check = (name, cond, extra = '') => {
@@ -23,8 +41,32 @@ const check = (name, cond, extra = '') => {
   }
 };
 
+/** 起一个独立外壳，界面从磁盘读（与开发时一致）。 */
+async function startShell() {
+  const rendererDir = path.join(__dirname, '..', 'desktop', 'renderer');
+  const shell = createShell({
+    port: PORT,
+    host: '127.0.0.1',
+    dataDir: DATA_DIR,
+    shellName: 'node-http',
+    readAsset: (rel) => {
+      const target = path.join(rendererDir, rel);
+      if (!target.startsWith(rendererDir)) return null;
+      try {
+        return fs.readFileSync(target);
+      } catch {
+        return null;
+      }
+    },
+  });
+  await listen(shell, PORT, '127.0.0.1');
+  return shell;
+}
+
 async function main() {
-  const token = fs.readFileSync(path.join(__dirname, '..', 'data', '.shell-token'), 'utf8').trim();
+  console.log(`独立测试实例：${BASE}，数据目录 ${path.relative(path.join(__dirname, '..'), DATA_DIR)}`);
+  const shell = await startShell();
+  const token = fs.readFileSync(path.join(DATA_DIR, '.shell-token'), 'utf8').trim();
   const url = `${BASE}/?token=${token}`;
 
   console.log('\n[HTTP 外壳] 鉴权');
@@ -144,9 +186,9 @@ A. completes  B. completed  C. was completed  D. has completed
   }
 
   console.log('\n[HTTP 外壳] 数据落盘');
-  const dataDir = path.join(__dirname, '..', 'data');
-  check('数据库文件已创建', fs.existsSync(path.join(dataDir, 'questions.db')), path.join(dataDir, 'questions.db'));
-  check('地址文件已写出（供启动器使用）', fs.existsSync(path.join(dataDir, '.shell-url')));
+  // 检查的是**测试实例自己的**数据目录，不是用户的 data/
+  check('数据库文件已创建', fs.existsSync(path.join(DATA_DIR, 'questions.db')), path.join(DATA_DIR, 'questions.db'));
+  check('地址文件已写出（供启动器使用）', fs.existsSync(path.join(DATA_DIR, '.shell-url')));
 
   console.log('\n[HTTP 外壳] 分组');
   const gcreate = await invoke('groups:create', { name: `端到端分组_${Date.now()}` });
@@ -239,8 +281,9 @@ A. completes  B. completed  C. was completed  D. has completed
   check('没选中任何题时报错而不是误删', noIds.ok === false, JSON.stringify(noIds).slice(0, 120));
 
   console.log('\n[HTTP 外壳] 格式化（清空数据）');
-  // 注意：**只验证防护逻辑，不真的清空**。
-  // 这个实例连着用户的真实题库，跑一次就会把数据抹掉。
+  // 现在这是**独立实例**，可以放心真正执行清空 —— 它只影响临时数据目录。
+  // （以前这里连着用户真实题库，我加了"用正确确认词"的断言，结果第一次跑就把
+  //   用户的题清空了。测试能真正执行破坏性操作的前提，是它必须有自己的数据。）
   const resetPreview = await invoke('db:resetPreview');
   check('预览接口可用', resetPreview.ok === true && typeof resetPreview.counts === 'object',
     JSON.stringify(resetPreview).slice(0, 160));
@@ -256,12 +299,37 @@ A. completes  B. completed  C. was completed  D. has completed
   const spacedWord = await invoke('db:reset', { confirm: ' 格式化 ' });
   check('确认词带空格也不通过', spacedWord.ok === false, JSON.stringify(spacedWord).slice(0, 120));
 
-  // 确认数据确实没被这些试探动作清掉
-  const afterProbe = await invoke('questions:counts');
-  check('多次试探后数据仍在', afterProbe.ok === true && afterProbe.counts.total > 0,
-    `题库 ${afterProbe.counts?.total} 题`);
+  const beforeReset = await invoke('questions:counts');
+  check('多次试探后数据仍在（防护有效）', beforeReset.ok === true && beforeReset.counts.total > 0,
+    `题库 ${beforeReset.counts?.total} 题`);
+
+  // 正确确认词 → 在隔离实例上真正执行，验证清空效果
+  //
+  // 先存一个 API Key：config.json 只在保存过模型设置后才存在，
+  // 而"格式化要保留 Key"正是这里要验证的事。
+  await invoke('settings:set', { apiKey: 'sk-http-test-key' });
+  const didReset = await invoke('db:reset', { confirm: '格式化' });
+  check('正确确认词才执行清空', didReset.ok === true, JSON.stringify(didReset).slice(0, 160));
+  const afterReset = await invoke('questions:counts');
+  check('清空后题库为 0', afterReset.counts.total === 0, `实际 ${afterReset.counts?.total}`);
+  const groupsAfter = await invoke('groups:list');
+  check('清空后分组为 0', groupsAfter.groups.length === 0);
+  const settingsAfter = await invoke('settings:get');
+  check('格式化保留 API Key', settingsAfter.settings.hasApiKey === true,
+    JSON.stringify(settingsAfter.settings).slice(0, 120));
+  const cfg = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'config.json'), 'utf8'));
+  check('格式化保留模型配置', cfg.apiKey === 'sk-http-test-key', `实际 ${JSON.stringify(cfg.apiKey)}`);
 
   console.log(`\n${failures === 0 ? 'HTTP 外壳全部通过' : `有 ${failures} 项失败`}\n`);
+
+  // 收尾：关服务、删临时数据目录
+  shell.server.close();
+  shell.host.close();
+  try {
+    fs.rmSync(DATA_DIR, { recursive: true, force: true });
+  } catch {
+    /* 删不掉也不影响结论 */
+  }
   process.exit(failures === 0 ? 0 : 1);
 }
 

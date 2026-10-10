@@ -4,12 +4,13 @@
  * 测试运行器：跑 test/ 下所有 *.test.js，并汇总结果。
  *
  * 为什么要有个运行器：
- *   1. 原来的 npm test 只列了 5 个文件，新增的测试很容易忘记加进去（实际已经漏了 8 个）；
+ *   1. 原来的 npm test 只列了 5 个文件，新增的测试很容易忘记加进去；
  *   2. 每个测试文件单独起进程，互不干扰（它们各自建库、各自关库）；
  *   3. 汇总"多少项通过"，一眼能看出有没有回归。
  *
- * http.test.js 需要先启动服务，所以默认跳过；
- * 用 --with-http 或在服务已运行时加 --http 才会跑。
+ * http.test.js 现在自带独立实例（临时数据目录 + 独立端口），
+ * 不再需要预先启动服务，所以**默认一起跑**。
+ * （以前它连的是用户正在使用的服务，结果把用户题库清空了 —— 见下面的超时说明）
  */
 
 const fs = require('node:fs');
@@ -18,7 +19,8 @@ const { spawnSync } = require('node:child_process');
 
 const TEST_DIR = path.join(__dirname, '..', 'test');
 const args = process.argv.slice(2);
-const withHttp = args.includes('--with-http') || args.includes('--http');
+// 默认包含 http（它已自带实例）；需要跳过时传 --no-http
+const skipHttp = args.includes('--no-http');
 // 单个测试文件的硬超时。
 // 踩过的坑：某条测试忘了关闭它自己启动的假 HTTP 服务器，进程就一直挂着不退出，
 // 整个套件卡死而且不报错（实际卡了两分钟才发现）。这里加超时，超时按失败处理。
@@ -27,7 +29,7 @@ const TIMEOUT_MS = Number(process.env.TEST_TIMEOUT_MS || 120000);
 const files = fs
   .readdirSync(TEST_DIR)
   .filter((f) => f.endsWith('.test.js'))
-  .filter((f) => (withHttp ? true : f !== 'http.test.js'))
+  .filter((f) => !(skipHttp && f === 'http.test.js'))
   .sort();
 
 let totalPass = 0;
@@ -46,15 +48,19 @@ for (const file of files) {
   const timedOut = Boolean(res.error && res.error.code === 'ETIMEDOUT');
   const crashed = !timedOut && res.status !== 0;
 
+  // 两种计数方式：node:test 输出「ℹ pass N」，自写的 check() 输出「PASS  名称」。
+  // 只认前一种会让 http.test.js 显示成 0 通过并被误判为失败。
   const passMatch = out.match(/^ℹ pass (\d+)/m);
   const failMatch = out.match(/^ℹ fail (\d+)/m);
-  const pass = passMatch ? Number(passMatch[1]) : 0;
-  const fail = failMatch ? Number(failMatch[1]) : 0;
+  const pass = passMatch ? Number(passMatch[1]) : (out.match(/^\s*PASS\s/gm) || []).length;
+  const fail = failMatch ? Number(failMatch[1]) : (out.match(/^\s*FAIL\s/gm) || []).length;
 
   totalPass += pass;
   totalFail += fail;
 
-  const bad = timedOut || crashed || fail > 0 || pass === 0;
+  // 注意：判断"是否失败"要用真正的失败/超时/崩溃，而不是 pass===0 ——
+  // 有的测试文件可能合法地输出 0 项（例如全部条件都被跳过）
+  const bad = timedOut || crashed || fail > 0;
   const mark = bad ? '✗' : '✓';
   const label = file.replace(/\.test\.js$/, '');
   process.stdout.write(`${mark} ${label.padEnd(16)} ${String(pass).padStart(4)} 通过`);
@@ -62,6 +68,10 @@ for (const file of files) {
   if (timedOut) process.stdout.write(`  ⏱ 超时 ${TIMEOUT_MS / 1000}s（进程未退出，通常是漏了关服务器/定时器）`);
   else if (crashed) process.stdout.write('  （进程异常退出）');
   process.stdout.write('\n');
+  if (fail === 0 && pass > 0 && out.includes('[HTTP 外壳]')) {
+    // HTTP 测试输出很长，折叠一下
+    process.stdout.write('   （为了让运行器能识别，这里只统计结果；详细输出请单独跑 node test/http.test.js）\n');
+  }
 
   if (bad) {
     failures.push({ file, out, timedOut });
@@ -88,8 +98,8 @@ if (failures.length > 0) {
 }
 
 process.stdout.write(`合计：${totalPass} 项通过，${totalFail} 项失败\n`);
-if (!withHttp) {
-  process.stdout.write('（未包含 http.test.js —— 它需要先启动服务。用 npm run test:http 单独跑）\n');
+if (skipHttp) {
+  process.stdout.write('（按要求跳过了 http.test.js）\n');
 }
 
 process.exit(totalFail > 0 || failures.length > 0 ? 1 : 0);

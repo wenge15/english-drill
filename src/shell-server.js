@@ -236,7 +236,7 @@ function createShell(opts) {
 
   const url = `http://${hostAddr}:${port}/?token=${token}`;
   void log;
-  return { server, host: appHost, token, url };
+  return { server, host: appHost, token, url, dataDir };
 }
 
 /** 监听端口；端口被占用等失败会 reject，调用方据此换端口重试。 */
@@ -248,6 +248,14 @@ function listen(shell, port, hostAddr) {
     };
     const onOk = () => {
       shell.server.removeListener('error', onError);
+      // 成功监听后把地址写盘，供启动器/快捷方式读取。
+      // 收在这里而不是放在各个入口，是因为创建外壳的每一处都需要它
+      // （开发外壳、打包 exe、测试用的独立实例），分散写容易出现"某个入口忘了写"。
+      try {
+        fs.writeFileSync(path.join(shell.dataDir, '.shell-url'), shell.url, 'utf8');
+      } catch {
+        /* 写不了不影响使用 */
+      }
       resolve();
     };
     shell.server.once('error', onError);
