@@ -234,8 +234,25 @@ function createRepo(dbPath) {
     return generated;
   }
 
-  const getSetting = (key) => {
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  /**
+   * 取某题在指定会话中**最新一轮**的呈现顺序。
+   *
+   * 用途：讲评要显示"你这次选的那个字母是什么意思"，就必须用本轮的冻结顺序，
+   * 不能用当前题库（选项顺序每轮都会打乱，字母含义已经变了）。
+   * sessionId 缺省时返回 null，调用方回退到当前题库。
+   */
+  function latestPresentation(sessionId, questionId, question) {
+    if (!sessionId) return null;
+    const row = db
+      .prepare(
+        `SELECT MAX(round) AS r FROM practice_questions WHERE session_id = ? AND question_id = ?`,
+      )
+      .get(Number(sessionId), Number(questionId));
+    if (!row || row.r === null || row.r === undefined) return null;
+    return presentationOf(Number(sessionId), Number(questionId), row.r, question);
+  }
+
+  const getSetting = (key) => {    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
     if (!row) return DEFAULT_SETTINGS[key];
     try {
       return JSON.parse(row.value);
@@ -786,20 +803,54 @@ function createRepo(dbPath) {
    * 某道题的作答历史（倒序，最近的在最前）。
    * 用于"第二次做错时把前几次的答案摆给用户看"——这是最有说服力的讲评材料。
    */
+  /**
+   * 某题的历史作答。
+   *
+   * 关键：**每一行都带上当时的选项顺序快照**。
+   *
+   * 踩过的坑（真实 bug）：选项顺序每次练习都会打乱，而作答记录只存字母。
+   * 如果回头用"当前"的选项顺序去解释旧字母，含义就错位了 ——
+   * 用户看到"你选了 C · some other，正确答案是 C · some other"却判错，
+   * 因为那一刻 C 其实是 every others，而正确答案 B 是 some other。
+   * 所以这里必须把 presented_options / presented_answer 一起带出来，
+   * 调用方要用快照而不是当前题库去渲染文字。
+   */
   function attemptHistory(questionId, limit = 20) {
     return db
-      .prepare(`SELECT a.round, a.picked, a.correct, a.created_at, a.session_id, s.day
-        FROM attempts a LEFT JOIN sessions s ON s.id = a.session_id
-        WHERE a.question_id = ? ORDER BY a.created_at DESC LIMIT ?`)
+      .prepare(
+        `SELECT a.round, a.picked, a.correct, a.created_at, a.session_id, s.day,
+                pq.presented_answer, pq.presented_options
+           FROM attempts a
+           LEFT JOIN sessions s ON s.id = a.session_id
+           LEFT JOIN practice_questions pq
+                  ON pq.session_id = a.session_id
+                 AND pq.question_id = a.question_id
+                 AND pq.round = a.round
+          WHERE a.question_id = ?
+          ORDER BY a.created_at DESC
+          LIMIT ?`,
+      )
       .all(questionId, limit)
-      .map((r) => ({
-        round: r.round,
-        picked: r.picked,
-        correct: Boolean(r.correct),
-        at: r.created_at,
-        sessionId: r.session_id,
-        day: r.day,
-      }));
+      .map((r) => {
+        // 快照可能缺失（老数据或非练习途径写入），解析失败就交给调用方回退
+        let frozen = null;
+        try {
+          frozen = r.presented_options ? JSON.parse(r.presented_options) : null;
+        } catch {
+          frozen = null;
+        }
+        return {
+          round: r.round,
+          picked: r.picked,
+          correct: Boolean(r.correct),
+          at: r.created_at,
+          sessionId: r.session_id,
+          day: r.day,
+          /** 当时的选项顺序快照；为 null 时调用方应回退到当前题库并标注不确定 */
+          presentedOptions: frozen,
+          presentedAnswer: r.presented_answer || '',
+        };
+      });
   }
 
   /** 本次会话里某题错了几次（含重做轮）。 */
@@ -1253,6 +1304,7 @@ function createRepo(dbPath) {
     wrongBook,
     forecast,
     attemptHistory,
+    latestPresentation,
     sessionWrongCount,
     sessionMistakes,
     ensureGroup,

@@ -262,6 +262,42 @@ Windows 会把某些端口段保留给 Hyper-V/WSL，这是个真实且常见的
   （以前只删了 `chat_threads`，没有外键级联），返回值新增 `messagesDeleted`。
   新增 2 项测试，其中一项专门断言"库里没有孤儿消息"。
 
+### 已修（2026-10-10）：讲评显示的选项含义错位（用户报告的 bug）
+
+**现象**：讲评里出现自相矛盾的一行 —— "你这次选了 C · some other，正确答案是 C · some other"
+却判错。用户选了 C 判错是对的，但两处文字都错了。
+
+**根因**：选项顺序**每轮都会打乱**（刻意的功能），而作答记录只存字母。
+讲评用**当前题库**的 `options` 去翻译历史上的字母，于是错位：
+
+| 来源 | C 是什么 | 正确答案 |
+|---|---|---|
+| 那一轮实际呈现的顺序（评分用的） | `every others` | B · `some other` |
+| 当前题库的顺序（讲评错用的） | `some other` | C · `some other` |
+
+两处错位叠加，就出现了"同一个字母、同一段文字，却判错"。
+
+**修法**：
+
+1. `attemptHistory` 带上 `presented_options` / `presented_answer` 快照
+   （关联 `practice_questions`，按 session + question + round 匹配）。
+2. `teach:mistake` 用**当轮快照**翻译字母；新增 `latestPresentation()`
+   取本轮冻结顺序，并把 `currentRound` 返给界面。
+3. 界面 `renderInlineTeach` 渲染所选/正确答案时改用 `currentRound.options`
+   （与评分同源），不再用 `question.options`。
+4. "这次和上次选的是同一个选项"改用**文字**比较而非字母 ——
+   字母在不同轮次含义不同，比字母会得出错误结论。
+5. 缺快照的旧记录标 `snapshotMissing`，界面显式提示"文字是按当前顺序解释的，
+   含义可能已变"，而不是悄悄用当前数据冒充历史。
+
+**同类教训（与"测试隔离"是同一个道理）**：
+**不要用当前状态去解释历史事件。** 选项顺序、题库内容都会变，
+凡是"回顾过去"的地方都必须读当时固化的快照 ——
+这正是会话里每题都冻结 `presented_answer` / `presented_options` 的原因。
+
+**测试**：`test/teach-chat.test.js` 新增 3 项回归，关键一条断言
+`pickedText === 当轮快照[picked]`；开启乱序后若退回用当前题库，这条会失败。
+
 ### ⚠ 事故记录（2026-10-10）：测试清空了用户的真实题库
 
 **发生了什么**：我给「格式化」功能补 HTTP 测试时，在测试里用了正确确认词

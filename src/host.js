@@ -804,6 +804,39 @@ function createHost(opts) {
       const totalWrong = history.filter((h) => !h.correct).length;
       const wrongAttempts = history.filter((h) => !h.correct).slice(0, 4);
 
+      /**
+       * 取"本轮"的冻结呈现顺序。
+       *
+       * 为什么需要：历史记录里最新那条就是本轮（刚作答的那次），
+       * 它的字母只有配上本轮的选项顺序才有意义。
+       * 单靠 attemptHistory 里的快照关联（按 session_id + round 匹配）
+       * 也能拿到，但这里再显式取一次更稳，并且能给界面提供"本轮选项"用于渲染。
+       */
+      const current = repo.latestPresentation(sessionId, q.id, q);
+
+      /**
+       * 把"那次作答时的字母"翻译成文字。
+       *
+       * 必须用当次的选项快照，不能用当前题库 —— 选项顺序每次练习都打乱，
+       * 用当前顺序解释旧字母会得到错误含义（真实 bug：
+       * 显示"你选了 C · some other，正确答案是 C · some other"却判错，
+       * 因为那次 C 是 every others、正确答案是 B 的 some other）。
+       */
+      const textOf = (h, letter) => {
+        if (!letter) return '';
+        if (h.presentedOptions && h.presentedOptions[letter]) return h.presentedOptions[letter];
+        return q.options[letter] || '';
+      };
+
+      /**
+       * 这条记录的文字是否来自**它自己的**快照。
+       *
+       * 注意不能放宽成"会话匹配就算有" —— 那会把真正缺快照的旧记录
+       * 也标成可信，正是这个 bug 的同类错误（用当前数据冒充历史）。
+       * 缺快照时界面要显式提示"文字是按当前顺序解释的，含义可能已变"。
+       */
+      const hasSnapshot = (h) => Boolean(h.presentedOptions);
+
       return {
         ok: true,
         question: {
@@ -815,19 +848,29 @@ function createHost(opts) {
           explanation: q.explanation,
           knowledgePoints: q.knowledgePoints,
         },
+        /**
+         * 本轮的冻结呈现顺序（与评分同源）。
+         * 界面渲染"你这次选了 X"必须用它，不能用 question.options。
+         */
+        currentRound: current ? { options: current.options, answer: current.answer } : null,
         /** 这是第几次错（累计） */
         wrongCount: totalWrong,
         sessionWrong,
         /** 前几次错的答案，最近的在前 */
         wrongAttempts: wrongAttempts.map((h) => ({
           picked: h.picked,
-          pickedText: q.options[h.picked] || '',
+          pickedText: textOf(h, h.picked),
           day: h.day,
           round: h.round,
         })),
         history: history.map((h) => ({
           ...h,
-          pickedText: q.options[h.picked] || '',
+          pickedText: textOf(h, h.picked),
+          // 当时那次的正确答案（可能与现在的 answer 不同，因为选项顺序变了）
+          answerAtThatTime: h.presentedAnswer || '',
+          answerTextAtThatTime: textOf(h, h.presentedAnswer || ''),
+          // 没有快照时，界面要提示"这是按当前选项顺序解释的，含义可能已变"
+          snapshotMissing: !hasSnapshot(h),
         })),
         /** 累计错 2 次及以上才需要展开讲评 */
         needsTeaching: totalWrong >= 2,

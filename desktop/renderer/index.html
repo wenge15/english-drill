@@ -433,33 +433,56 @@ async function practiceScreen(session, resumed) {
     const feedback = $('#feedback');
     if (!feedback) return onNext();
 
+    /**
+     * 选项文字必须来自**本轮的冻结顺序**，绝不能来自当前题库。
+     *
+     * 真实 bug：练习里选项顺序每轮都打乱，而讲评以前用当前题库的 options
+     * 去解释本轮的字母，于是出现"你选了 C · some other，正确答案是 C · some other"
+     * 却判错 —— 因为那一轮 C 其实是 every others、正确答案是 B 的 some other。
+     *
+     * 数据来源优先级：服务端给的 currentRound（与评分同源）→ 会话项的 options → 当前题库。
+     */
+    const roundOptions = (t.currentRound && t.currentRound.options) || it.options || q.options || {};
+    const pickedText = picked ? roundOptions[picked] || '' : '';
+    const answerLetter = (t.currentRound && t.currentRound.answer) || it.answer || q.answer;
+    const answerText = answerLetter ? roundOptions[answerLetter] || '' : '';
+
+    // 每次作答的选项顺序可能不同，所以"是不是同一个选择"要比**文字**而不是字母
     const historyHtml = (t.history || []).slice(0, 6).map((h) => `
       <div class="hrow ${h.correct ? 'ok' : ''}">
         <span class="when">${esc(h.day || '')} 第${h.round}轮</span>
         <span class="what">选了 <b class="${h.correct ? 'okc' : 'crit'}">${esc(h.picked || '未作答')}</b>${h.pickedText ? ` · ${esc(h.pickedText)}` : ''}</span>
-        <span class="mark">${h.correct ? '<span class="okc">对</span>' : '<span class="crit">错</span>'}</span>
+        <span class="mark">${h.correct ? '<span class="okc">对</span>' : '<span class="crit">错</span>'}${h.snapshotMissing ? '<span class="muted" title="那次作答没有留下选项顺序快照，文字是按当前顺序解释的">?</span>' : ''}</span>
       </div>`).join('');
 
-    // 提示：你这次选的和上次选的是不是同一个 —— 这决定了讲评的方向
+    // 与上一次错选比较：比文字才可靠（字母在不同轮次含义不同）
     const prevWrong = (t.history || []).filter((h) => !h.correct && h.picked);
-    const lastWrong = prevWrong.find((h) => h.picked !== picked) ? prevWrong.find((h) => h.picked !== picked) : prevWrong[0];
-    const sameAsLast = lastWrong && lastWrong.picked === picked;
+    const lastWrong = prevWrong[0];
+    const sameAsLast = Boolean(lastWrong) && (
+      lastWrong.pickedText && pickedText
+        ? lastWrong.pickedText === pickedText
+        : lastWrong.picked === picked
+    );
+    const anySnapshotMissing = (t.history || []).some((h) => h.snapshotMissing);
 
     feedback.innerHTML = `
       <div class="teach" style="margin-top:16px">
         <h4>这道题你已经错 ${t.wrongCount} 次了</h4>
         <div style="margin-bottom:10px">
-          你这次选了 <b class="crit">${esc(picked)}</b>${q.options[picked] ? ` · ${esc(q.options[picked])}` : ''}，
-          正确答案是 <b class="okc">${esc(q.answer)}</b>${q.answerText ? ` · ${esc(q.answerText)}` : ''}
+          你这次选了 <b class="crit">${esc(picked)}</b>${pickedText ? ` · ${esc(pickedText)}` : ''}，
+          正确答案是 <b class="okc">${esc(answerLetter)}</b>${answerText ? ` · ${esc(answerText)}` : ''}
         </div>
         ${q.knowledgePoints.length
           ? `<div style="margin-bottom:10px">考点：${q.knowledgePoints.map((k) => `<span class="chip">${esc(k)}</span>`).join('')}</div>`
           : '<div class="muted" style="margin-bottom:10px">这道题还没标注考点。</div>'}
         ${sameAsLast
-          ? `<div class="muted" style="font-size:12.5px;margin-bottom:8px">注意：这次和上次选的是同一个选项，说明这个考点还没弄明白。</div>`
+          ? `<div class="muted" style="font-size:12.5px;margin-bottom:8px">注意：这次和上次选的是同一个选项（文字相同），说明这个考点还没弄明白。</div>`
+          : ''}
+        ${anySnapshotMissing
+          ? `<div class="warnbox" style="margin-bottom:8px;font-size:12.5px">部分旧记录的选项顺序快照已缺失，带 <b>?</b> 的那几行文字是按<b>当前</b>选项顺序解释的，含义可能与当时不同。</div>`
           : ''}
         ${q.explanation ? `<div style="margin-bottom:10px">${esc(q.explanation)}</div>` : ''}
-        <div class="muted" style="font-size:12.5px;margin-bottom:6px">你前几次选的：</div>
+        <div class="muted" style="font-size:12.5px;margin-bottom:6px">你前几次选的（选项顺序每轮都会打乱，所以文字按当时顺序显示）：</div>
         <div class="history">${historyHtml || '<div class="muted">没有更早的记录</div>'}</div>
         <div class="row" style="margin-top:12px">
           <button class="btn ghost" id="nextQ">懂了，继续下一题</button>

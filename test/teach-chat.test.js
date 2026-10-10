@@ -397,3 +397,122 @@ test('预置校准：只补空缺，不动用户已填的地址', async () => {
   assert.strictEqual(r.patch.baseUrl, undefined, '地址已填，不该出现在补丁里');
   host.close();
 });
+
+/* ---------------- 讲评：选项顺序快照（真实 bug 回归） ---------------- */
+
+/** 造一道题并在一场练习里作答两次，返回 { q, sessionId }。 */
+async function playAndAnswerTwice(host, opts = {}) {
+  await host.invoke('questions:save', {
+    questions: [
+      {
+        stem: opts.stem || 'I got the story from Tom and ____ people.',
+        options: opts.options || { A: 'every others', B: 'many others', C: 'some other', D: 'other than' },
+        answer: opts.answer || 'C',
+      },
+    ],
+  });
+  const list = await host.invoke('questions:list', {});
+  const q = list.questions[0];
+
+  // practice:start 直接返回 sessionDetail（含 items）
+  const started = await host.invoke('practice:start', { force: true });
+  const sessionId = started.session.id;
+  const item = started.session.items.find((x) => x.questionId === q.id);
+  // 在**呈现顺序**里故意选错
+  const pickWrong = (it) => Object.keys(it.options).find((L) => L !== it.answer) || 'A';
+  await host.invoke('practice:answer', { sessionId, questionId: q.id, picked: pickWrong(item) });
+
+  // 开重做轮，再错一次（第 2 轮），这样累计错 2 次会触发讲评
+  const retry = await host.invoke('practice:retry', { sessionId });
+  const items2 = (retry.session && retry.session.items) || [];
+  const item2 = items2.find((x) => x.questionId === q.id);
+  if (item2) {
+    await host.invoke('practice:answer', { sessionId, questionId: q.id, picked: pickWrong(item2) });
+  }
+  return { q, sessionId };
+}
+
+test('讲评回归：历史作答的文字必须用当轮选项顺序，不能套当前顺序', async () => {
+  // 真实 bug：显示"你选了 C · some other，正确答案是 C · some other"却判错。
+  // 原因是选项顺序每轮打乱，而讲评用**当前题库**的 options 去解释旧字母。
+  const host = mkHost();
+  // 开启乱序，才能复现"当前顺序 ≠ 当轮顺序"
+  host.repo.setSetting('shuffleOptions', true);
+  host.repo.setSetting('shuffleOrder', true);
+  const { q, sessionId } = await playAndAnswerTwice(host);
+
+  const t = await host.invoke('teach:mistake', { questionId: q.id, sessionId });
+  assert.strictEqual(t.ok, true);
+  assert.ok(t.history.length > 0, '应有历史记录');
+  assert.ok(t.currentRound, '应返回本轮的冻结顺序，供界面渲染');
+
+  for (const h of t.history) {
+    const snap = h.presentedOptions;
+    if (!snap) continue; // 老数据没快照，跳过
+    // 关键断言：pickedText 必须等于"当轮字母 → 当轮文字"的映射结果
+    assert.strictEqual(
+      h.pickedText,
+      snap[h.picked] || '',
+      `第${h.round}轮的选项文字错了：应用当轮快照 ${JSON.stringify(snap[h.picked])}，` +
+        `实际 ${JSON.stringify(h.pickedText)}（当前题库里该字母是 ${JSON.stringify(host.repo.getQuestion(q.id).options[h.picked])}）`,
+    );
+  }
+
+  // 本轮顺序必须来自快照，而不是当前题库
+  const cur = host.repo.getQuestion(q.id).options;
+  assert.deepStrictEqual(
+    Object.keys(t.currentRound.options).sort(),
+    Object.keys(cur).sort(),
+    '本轮选项应含全部键',
+  );
+  // 本轮的正确答案是**当轮冻结**的值：选项顺序变了，答案字母也会变，
+  // 所以不能拿题库的 answer 去比（那正是这个 bug 的成因）。
+  // 可靠的验证是：本轮的两条路径（currentRound 与最新一条 history）必须一致。
+  assert.ok(/^[A-F]$/.test(t.currentRound.answer), '本轮正确答案应是一个字母');
+  const latest = t.history[0];
+  assert.strictEqual(
+    t.currentRound.answer,
+    latest.answerAtThatTime,
+    `本轮答案（currentRound=${t.currentRound.answer}）应与最新一条历史记录的当轮答案（${latest.answerAtThatTime}）一致`,
+  );
+  assert.strictEqual(
+    t.currentRound.options[t.currentRound.answer],
+    latest.answerTextAtThatTime,
+    '同一轮里正确答案的文字两处必须一致',
+  );
+  host.close();
+});
+
+test('讲评回归：每条历史都带上"当时的正确答案"，便于对照', async () => {
+  const host = mkHost();
+  host.repo.setSetting('shuffleOptions', true);
+  const { q, sessionId } = await playAndAnswerTwice(host);
+  const t = await host.invoke('teach:mistake', { questionId: q.id, sessionId });
+  for (const h of t.history) {
+    if (!h.presentedOptions) continue;
+    assert.ok(h.answerAtThatTime, `第${h.round}轮应记录当时的正确答案字母`);
+    assert.strictEqual(
+      h.answerTextAtThatTime,
+      h.presentedOptions[h.answerAtThatTime] || '',
+      '当时正确答案的文字也要按当时顺序翻译',
+    );
+  }
+  host.close();
+});
+
+test('讲评回归：没有快照的老记录要标记出来，而不是悄悄按当前顺序解释', async () => {
+  const host = mkHost();
+  host.repo.setSetting('shuffleOptions', false);
+  const { q, sessionId } = await playAndAnswerTwice(host);
+  // 破坏快照，模拟老数据
+  host.repo.raw.prepare('UPDATE practice_questions SET presented_options = NULL, presented_answer = NULL WHERE question_id = ?').run(q.id);
+
+  const t = await host.invoke('teach:mistake', { questionId: q.id, sessionId });
+  const anyMissing = t.history.some((h) => h.snapshotMissing);
+  assert.strictEqual(anyMissing, true, '缺快照的记录应被标记 snapshotMissing，界面据此提示用户');
+  // 不能因为缺快照就崩掉：仍要返回文字
+  for (const h of t.history) {
+    assert.strictEqual(typeof h.pickedText, 'string');
+  }
+  host.close();
+});
