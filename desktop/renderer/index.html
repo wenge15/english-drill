@@ -4,6 +4,10 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>英语练习 · English Drill</title>
+<!-- 内联 SVG 图标：避免浏览器去请求 /favicon.ico。
+     那个请求会被 token 校验拦下（返回 403），在控制台留一条红字错误，
+     看起来像软件出问题了。内联图标零请求、零报错。 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f8cff'/%3E%3Ctext x='16' y='23' font-size='19' font-family='Segoe UI,sans-serif' font-weight='700' fill='%23fff' text-anchor='middle'%3EE%3C/text%3E%3C/svg%3E" />
 <style>
   :root{
     --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#28313c;
@@ -2116,6 +2120,33 @@ async function openSessionResult(sessionId) {
     const mm = /#session=(\d+)/.exec(location.hash || '');
     if (mm) openSessionResult(mm[1]);
   });
+})();
+
+/* ------------------------------------------------------------------
+ * 彩蛋：打开控制台（F12）就能看到。
+ *
+ * 这不是玩笑，是认真的致谢 —— ExpertKT 在没有被要求的情况下，
+ * 读完了全部源码，修好了集训题量分配与复习调度重复累计两个真 bug，
+ * 还逐条列出 5 个尚未修复的问题（含行号与修法），其中"公开页泄露 token"
+ * 和"畸形请求打死服务"是我自己复查时漏掉的安全与健壮性缺陷。
+ * 这份认真值得被记在代码里。
+ * ------------------------------------------------------------------ */
+(function easterEgg() {
+  const styleTitle = 'color:#6bd3ff;font-size:15px;font-weight:700';
+  const styleBody = 'color:#8b98a8;font-size:12px';
+  const styleName = 'color:#ffd166;font-size:14px;font-weight:700';
+  const styleBeat = 'color:#4ade80;font-size:13px';
+
+  console.log('%c英语练习 · English Drill%c  v0.1.0', styleTitle, 'color:#5b6b7d;font-size:12px');
+  console.log('%c零依赖 · 本地运行 · 你的题库只在这台机器上', styleBody);
+  console.log('');
+  console.log('%c特别感谢 ExpertKT', styleName);
+  console.log('%c  感谢我最好、最专业的兄弟 ExpertKT 的指导。', styleBody);
+  console.log('%c  他读完全部源码，修好了集训题量分配与复习调度重复累计，', styleBody);
+  console.log('%c  还逐条列出了 5 个未修问题（含行号与修法）。', styleBody);
+  console.log('%c  其中两处是我自己复查时漏掉的 —— 认真的人值得被记在代码里。', styleBody);
+  console.log('');
+  console.log('%c错题不会自己变少，但它们会记得你。', styleBeat);
 })();
 </script>
 </body>
