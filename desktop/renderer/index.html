@@ -775,6 +775,27 @@ A. completes  B. completed  C. was completed  D. has completed
           就能读图（设置页点「DeepSeek」预置即可），也可选智谱 glm-4v、通义 qwen-vl-max。
           如果只是偶尔录题，用「文本导入」更快。
         </div>
+
+        <div class="card" style="margin-bottom:12px;background:var(--panel2)">
+          <h2 style="margin-bottom:8px">📦 整包识别（一次几十张试卷）</h2>
+          <div class="muted" style="font-size:12.5px;margin-bottom:10px">
+            把一个 <b>ZIP 压缩包</b>丢进来，我会拆出里面所有图片（含子目录），
+            然后<b>逐张</b>识别。可以随时暂停，失败的那张也能单独重试。
+            支持 jpg / jpeg / png / gif / webp / bmp。
+          </div>
+          <div class="row" style="align-items:flex-end">
+            <label class="fld" style="flex:0 0 auto;margin-bottom:0">
+              <span>ZIP 压缩包</span>
+              <input type="file" id="zipFile" accept=".zip,application/zip" style="font-size:12.5px" />
+            </label>
+            <button class="btn" id="zipStartBtn" disabled>开始逐张识别</button>
+            <button class="btn ghost" id="zipPauseBtn" style="display:none">暂停</button>
+            <button class="btn ghost" id="zipClearBtn" style="display:none">清空这批</button>
+          </div>
+          <div id="zipOut" style="margin-top:12px"></div>
+        </div>
+
+        <div class="muted" style="font-size:12.5px;margin-bottom:6px">或者只识别少量图片：</div>
         <div class="drop" id="drop">点击选择图片，或把图片拖到这里 / 直接 Ctrl+V 粘贴截图</div>
         <div class="row" id="thumbs" style="margin-top:12px"></div>
         <label class="row" style="margin-top:12px;gap:8px;color:var(--muted);font-size:13px">
@@ -938,6 +959,248 @@ Answers: 21-B  22-C  23-B`;
     pending = all;
     pendingSource = 'image';
     renderReview(warns);
+  };
+
+  /* ---------------- ② 整包识别（ZIP） ---------------- */
+
+  /**
+   * 整包识别的队列状态。
+   * status: pending（待识别）| running（识别中）| done（成功）| failed（失败）
+   */
+  let zipBatch = { importId: '', items: [], running: false, paused: false };
+
+  /** 渲染队列进度。每次状态变化都调它，保证界面与状态一致。 */
+  function renderZipQueue() {
+    // 优先写内层容器（保留上面的解包提示），没有就用 #zipOut
+    const out = $('#zipQueue') || $('#zipOut');
+    if (!out) return;
+    const items = zipBatch.items;
+    if (items.length === 0) {
+      out.innerHTML = '';
+      $('#zipStartBtn').disabled = true;
+      $('#zipClearBtn').style.display = 'none';
+      $('#zipPauseBtn').style.display = 'none';
+      return;
+    }
+    const done = items.filter((i) => i.status === 'done').length;
+    const failed = items.filter((i) => i.status === 'failed').length;
+    const remaining = items.filter((i) => i.status === 'pending').length;
+    const totalQ = items.reduce((a, b) => a + (b.questions || 0), 0);
+    const pct = Math.round((done / items.length) * 100);
+
+    const failedList = items.filter((i) => i.status === 'failed');
+
+    out.innerHTML = `
+      <div class="row" style="justify-content:space-between;margin-bottom:6px">
+        <span><b>${done}</b> / ${items.length} 张已识别${
+          failed ? `｜<b class="crit">${failed} 张失败</b>` : ''
+        }${remaining ? `｜${remaining} 张待识别` : ''}｜累计 <b>${totalQ}</b> 道题</span>
+        <span class="muted" style="font-size:12.5px">${zipBatch.paused ? '已暂停' : zipBatch.running ? '识别中…' : '就绪'}</span>
+      </div>
+      <div class="bar" style="margin-bottom:10px"><i style="width:${pct}%"></i></div>
+      <div style="max-height:220px;overflow:auto">
+        <table style="width:100%;font-size:12.5px">
+          <tbody>${items
+            .map((it) => {
+              const mark =
+                it.status === 'done'
+                  ? `<span class="okc">✓ ${it.questions} 题</span>`
+                  : it.status === 'running'
+                    ? '<span class="spin"></span> 识别中'
+                    : it.status === 'failed'
+                      ? `<span class="crit">✗ ${esc(it.error || '失败')}</span>`
+                      : '<span class="muted">待识别</span>';
+              return `<tr>
+                <td style="color:var(--muted);white-space:nowrap">#${it.index}</td>
+                <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name)}</td>
+                <td style="white-space:nowrap">${mark}</td>
+              </tr>`;
+            })
+            .join('')}</tbody>
+        </table>
+      </div>
+      ${
+        failedList.length
+          ? `<div class="row" style="margin-top:10px">
+              <button class="btn ghost" id="zipRetryFailed">重试失败的 ${failedList.length} 张</button>
+            </div>`
+          : ''
+      }`;
+
+    $('#zipStartBtn').disabled = zipBatch.running || items.every((i) => i.status === 'done');
+    $('#zipStartBtn').textContent = zipBatch.paused
+      ? '继续识别'
+      : remaining === 0
+        ? '全部已完成'
+        : `开始逐张识别（共 ${items.length} 张）`;
+    $('#zipClearBtn').style.display = zipBatch.running ? 'none' : '';
+    $('#zipPauseBtn').style.display = zipBatch.running ? '' : 'none';
+
+    if ($('#zipRetryFailed')) {
+      $('#zipRetryFailed').onclick = () => {
+        for (const it of zipBatch.items) if (it.status === 'failed') it.status = 'pending';
+        runZipQueue();
+      };
+    }
+  }
+
+  /** 逐张顺序识别。可暂停：暂停后当前这张跑完就停。 */
+  async function runZipQueue() {
+    if (zipBatch.running) return;
+    zipBatch.running = true;
+    zipBatch.paused = false;
+    renderZipQueue();
+
+    for (;;) {
+      if (zipBatch.paused) break;
+      const it = zipBatch.items.find((x) => x.status === 'pending');
+      if (!it) break;
+
+      it.status = 'running';
+      renderZipQueue();
+
+      try {
+        // 逐张从服务端取（不把整包一次性塞进页面）
+        const got = await INVOKE('capture:zipItem', { itemId: it.itemId });
+        if (!got.ok) {
+          it.status = 'failed';
+          it.error = got.error || '取图失败';
+          renderZipQueue();
+          continue;
+        }
+        const r = await INVOKE('capture:extract', {
+          imageBase64: got.imageBase64,
+          mime: got.mime || it.mime,
+          answerInSource: $('#hasAnswer').checked,
+        });
+        if (!r.ok) {
+          // 跳过继续：记下原因，后面可以单独重试
+          it.status = 'failed';
+          it.error = r.error || '识别失败';
+        } else {
+          it.status = 'done';
+          it.questions = (r.questions || []).length;
+          it.data = r.questions || [];
+          it.warnings = r.warnings || [];
+        }
+      } catch (e) {
+        it.status = 'failed';
+        it.error = e.message || '识别异常';
+      }
+      renderZipQueue();
+    }
+
+    zipBatch.running = false;
+    renderZipQueue();
+
+    const total = zipBatch.items.reduce((a, b) => a + (b.questions || 0), 0);
+    const failed = zipBatch.items.filter((i) => i.status === 'failed').length;
+    const done = zipBatch.items.filter((i) => i.status === 'done').length;
+
+    if (zipBatch.paused) {
+      toast(`已暂停：完成 ${done} 张，累计 ${total} 道题`, 'okc');
+      return;
+    }
+    if (total === 0) {
+      toast(failed ? `全部失败（${failed} 张），请检查模型配置` : '没有识别出题目', 'err');
+      return;
+    }
+    // 汇总进核对页（与单张识别走同一条路）
+    collectZipResults();
+  }
+
+  /** 把整包识别的结果汇总，送进核对页。 */
+  function collectZipResults() {
+    const all = [];
+    const warns = [];
+    for (const it of zipBatch.items) {
+      if (it.status === 'done' && it.data) all.push(...it.data);
+      if (it.status === 'failed') warns.push(`「${it.name}」识别失败：${it.error}`);
+      for (const w of it.warnings || []) warns.push(`「${it.name}」：${w}`);
+    }
+    if (all.length === 0) {
+      const out = $('#zipOut');
+      out.innerHTML += `<div class="warnbox" style="margin-top:10px">没有识别出任何题目。可以逐张重试，或换一个更强的读图模型。</div>`;
+      return;
+    }
+    pending = all;
+    pendingSource = 'image';
+    toast(`整包识别完成：${all.length} 道题，请核对`, 'okc');
+    renderReview(warns);
+    // 滚到核对区，省得用户找不到
+    $('#reviewArea')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  $('#zipFile').onchange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const out = $('#zipOut');
+    const mb = (file.size / 1048576).toFixed(1);
+    out.innerHTML = `<div class="hintbox"><span class="spin"></span> 正在解包 ${esc(file.name)}（${mb} MB）…</div>`;
+
+    // 先释放上一批，避免内存叠加
+    await INVOKE('capture:zipClear', {});
+
+    const base64 = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+      fr.onerror = () => reject(new Error('读取文件失败'));
+      fr.readAsDataURL(file);
+    }).catch((err) => {
+      out.innerHTML = `<div class="warnbox">${esc(err.message)}</div>`;
+      return null;
+    });
+    if (base64 === null) return;
+
+    const r = await INVOKE('capture:unzip', { zipBase64: base64 });
+    if (!r.ok) {
+      out.innerHTML = `<div class="warnbox"><b>解包失败：</b>${esc(r.error)}</div>`;
+      zipBatch = { importId: '', items: [], running: false, paused: false };
+      renderZipQueue();
+      return;
+    }
+    zipBatch = {
+      importId: r.importId,
+      items: r.items.map((it) => ({ ...it, status: 'pending', questions: 0 })),
+      running: false,
+      paused: false,
+    };
+    const totalMB = (r.totalBytes / 1048576).toFixed(1);
+    const skippedNote =
+      r.errors && r.errors.length
+        ? `<div class="muted" style="margin-top:6px;font-size:12px">跳过的文件：${r.errors
+            .slice(0, 5)
+            .map(esc)
+            .join('；')}${r.errors.length > 5 ? ` …等 ${r.errors.length} 个` : ''}</div>`
+        : '';
+    // 队列渲染在同一条提示下面：先写提示，再由 renderZipQueue 追加进度表
+    out.innerHTML = `<div class="hintbox">
+      ${esc(r.message)}，合计 ${totalMB} MB。点「开始逐张识别」逐张处理。
+      ${skippedNote}
+    </div><div id="zipQueue"></div>`;
+    renderZipQueue();
+    toast(r.message, 'okc');
+  };
+
+  $('#zipStartBtn').onclick = () => {
+    zipBatch.paused = false;
+    runZipQueue();
+  };
+  $('#zipPauseBtn').onclick = () => {
+    zipBatch.paused = true;
+    $('#zipPauseBtn').disabled = true;
+    setTimeout(() => { $('#zipPauseBtn').disabled = false; }, 800);
+    toast('已请求暂停：当前这张识别完就停', 'okc');
+  };
+  $('#zipClearBtn').onclick = async () => {
+    if (zipBatch.running) return;
+    await INVOKE('capture:zipClear', {});
+    zipBatch = { importId: '', items: [], running: false, paused: false };
+    $('#zipFile').value = '';
+    const out = $('#zipOut');
+    if (out) out.innerHTML = '';
+    renderZipQueue();
+    toast('已清空这批', 'okc');
   };
 
   /* ---------------- ③ 手动录入 ---------------- */

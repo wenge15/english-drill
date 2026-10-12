@@ -27,11 +27,11 @@
 ## 二、测试情况
 
 ```bash
-npm test           # 309 项，16 个测试文件（含 HTTP 端到端与安全守护）
+npm test           # 334 项，17 个测试文件（含 HTTP 端到端与安全守护）
 npm run test:http  # 只跑 HTTP 端到端（自带独立实例）
 ```
 
-合计 **309 项断言**。
+合计 **334 项断言**。
 
 | 测试文件 | 项数 | 覆盖内容 |
 |---|---|---|
@@ -48,10 +48,12 @@ npm run test:http  # 只跑 HTTP 端到端（自带独立实例）
 | `test/reset.test.js` | 11 | 格式化：清空范围、保留项、确认词防护 |
 | `test/model.test.js` | 28 | 模型适配层、抗干扰核对（含假服务器） |
 | `test/flow.test.js` | 11 | 端到端业务流程 |
-| `test/ui.test.js` | 22 | 界面静态检查（结构、约束、入口、危险操作防护） |
+| `test/ui.test.js` | 24 | 界面静态检查（结构、约束、入口、危险操作防护、整包识别） |
 | `test/shuffle.test.js` | 12 | 乱序的确定性 |
-| `test/teach-chat.test.js` | 19 | 讲评、问答上下文、词汇题释义、预置校准 |
-| `test/http.test.js` | 61 | HTTP 外壳端到端（含安全与危险操作防护） |
+| `test/teach-chat.test.js` | 22 | 讲评、问答、词汇题释义、预置校准、选项顺序快照回归 |
+| `test/zip.test.js` | 16 | ZIP 读取：压缩方式、中文名、垃圾过滤、ZIP64/加密拒绝 |
+| `test/safety.test.js` | 6 | 安全守护：测试不得指向真实数据 |
+| `test/http.test.js` | 66 | HTTP 外壳端到端（含安全与危险操作防护） |
 
 `test/run-all.js` 会自动发现所有 `*.test.js`，新增测试不用手动注册。
 

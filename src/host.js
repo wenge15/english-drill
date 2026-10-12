@@ -16,6 +16,18 @@ const model = require('./core/model.js');
 const textparse = require('./core/textparse.js');
 const knowledge = require('./core/knowledge.js');
 const glossary = require('./core/glossary.js');
+const zip = require('./core/zip.js');
+
+/**
+ * 批量识图的暂存区：itemId → { bytes, mime, name }。
+ *
+ * 为什么要暂存在服务端：一个 zip 可能有几十张试卷照片，
+ * 全部转 base64 塞给浏览器会占用大量内存、也让界面难以管理。
+ * 这里只把元数据给界面，图片按需逐张取（配合"顺序逐张识别"）。
+ *
+ * 只保留最新一批（解新包时清空），避免内存无限增长。
+ */
+const batchStore = new Map();
 
 /** API Key 等敏感设置单独存一个文件，和题库数据库分开，便于备份/清理。 */
 function createStore(configPath) {
@@ -165,6 +177,104 @@ function createHost(opts) {
     'questions:counts': () => ({ ok: true, counts: repo.countQuestions(), today: localDayLabel() }),
 
     // ---------- 拍照录入 ----------
+    /**
+     * 解包 ZIP：把压缩包里的图片挑出来，暂存在服务端，返回清单。
+     *
+     * 为什么暂存在服务端而不是一次全发给浏览器：
+     * 一个压缩包可能有几十张试卷照片，全转成 base64 塞进一条消息会占用大量内存，
+     * 而且界面还得把它们全存在页面里。这里只在服务端存 bytes，
+     * 界面按需用 capture:zipItem 逐张取 —— 与"顺序逐张识别"的策略一致。
+     *
+     * 返回的清单不含图片内容，只有元数据（名字、大小、类型）。
+     */
+    'capture:unzip': ({ zipBase64, limit = 300 }) => {
+      const raw = String(zipBase64 || '').replace(/^data:[^,]+,/, '');
+      if (!raw) return { ok: false, error: '没有收到文件内容' };
+      let buf;
+      try {
+        buf = Buffer.from(raw, 'base64');
+      } catch {
+        return { ok: false, error: '文件内容解析失败，请重新选择' };
+      }
+      if (buf.length === 0) return { ok: false, error: '文件是空的' };
+
+      let result;
+      try {
+        result = zip.extractImages(buf, { limit });
+      } catch (e) {
+        // 把"为什么读不了"如实告诉用户，而不是笼统报错
+        return { ok: false, error: e.message };
+      }
+
+      if (result.images.length === 0) {
+        return {
+          ok: false,
+          error:
+            '这个压缩包里没有找到图片（支持 jpg/jpeg/png/gif/webp/bmp）。' +
+            '如果题目是 PDF 或 Word，请先截图或导出为图片再打包。',
+          skipped: result.skipped,
+          errors: result.errors,
+        };
+      }
+
+      // 丢弃上一批未消费的暂存，避免内存叠加
+      batchStore.clear();
+      const importId = `zip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const items = result.images.map((img, i) => {
+        const itemId = `${importId}_${i}`;
+        batchStore.set(itemId, { bytes: img.bytes, mime: img.mime, name: img.name });
+        return {
+          itemId,
+          name: img.name,
+          mime: img.mime,
+          size: img.size,
+          // 序号用于界面显示"第 N / 共 M 张"
+          index: i + 1,
+        };
+      });
+
+      return {
+        ok: true,
+        importId,
+        items,
+        total: items.length,
+        totalBytes: items.reduce((a, b) => a + b.size, 0),
+        skipped: result.skipped,
+        // 区分"本来就不是图片"和"是图片但读不出来"，便于用户判断要不要重压
+        junkSkipped: result.junkSkipped || 0,
+        nonImageSkipped: result.nonImageSkipped || 0,
+        failed: result.failed || 0,
+        errors: result.errors,
+        truncated: result.truncated,
+        message:
+          `从压缩包里取出 ${items.length} 张图片` +
+          (result.nonImageSkipped ? `，跳过 ${result.nonImageSkipped} 个非图片文件` : '') +
+          (result.junkSkipped ? `，忽略 ${result.junkSkipped} 个系统垃圾文件` : '') +
+          (result.failed ? `，有 ${result.failed} 张图片读取失败` : '') +
+          (result.truncated ? `，已达上限 ${limit} 张` : ''),
+      };
+    },
+
+    /** 取暂存图片中的一张（供界面逐张送入识别）。 */
+    'capture:zipItem': ({ itemId }) => {
+      const it = batchStore.get(String(itemId || ''));
+      if (!it) return { ok: false, error: '这张图已不在暂存中（可能已重新选择压缩包），请重新解包' };
+      return {
+        ok: true,
+        itemId,
+        name: it.name,
+        mime: it.mime,
+        imageBase64: it.bytes.toString('base64'),
+      };
+    },
+
+    /** 释放暂存（界面用完或用户取消时调用，避免占内存）。 */
+    'capture:zipClear': () => {
+      const n = batchStore.size;
+      batchStore.clear();
+      return { ok: true, released: n };
+    },
+
     'capture:extract': async ({ imageBase64, mime, answerInSource = true, saveImage = true }) => {
       const bytes = Buffer.from(String(imageBase64).replace(/^data:[^,]+,/, ''), 'base64');
       if (bytes.length === 0) return { ok: false, error: '图片为空，请重新拍照' };

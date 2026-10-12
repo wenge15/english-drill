@@ -261,3 +261,36 @@ test('格式化：界面如实列出要清除的数量，并说明保留了什�
   // 预览为 0 时不该让用户做无意义的操作
   assert.ok(/当前没有数据，无需格式化/.test(html), '没数据时应说明无需格式化');
 });
+
+test('整包识别：能选 ZIP、逐张识别、可暂停、失败可重试', () => {
+  // 入口与控件
+  assert.ok(/id="zipFile"/.test(html), '应有 ZIP 文件选择框');
+  assert.ok(/accept="\.zip/.test(html), '应限制选择 zip');
+  assert.ok(/id="zipStartBtn"/.test(html), '应有开始按钮');
+  assert.ok(/id="zipPauseBtn"/.test(html), '应有暂停按钮');
+  assert.ok(/id="zipClearBtn"/.test(html), '应有清空按钮');
+  assert.ok(/整包识别/.test(html), '应有整包识别区块标题');
+
+  // 后端接口
+  assert.ok(/capture:unzip/.test(html), '应调用解包接口');
+  assert.ok(/capture:zipItem/.test(html), '应逐张取图（不把整包塞进页面）');
+  assert.ok(/capture:zipClear/.test(html), '应能释放暂存');
+
+  // 运行逻辑
+  assert.ok(/async function runZipQueue/.test(html), '应有队列执行函数');
+  assert.ok(/function renderZipQueue/.test(html), '应有进度渲染');
+  assert.ok(/zipBatch\.paused/.test(html), '应支持暂停');
+  assert.ok(/重试失败的/.test(html), '失败应可重试');
+
+  // 暂停后当前这张跑完即停：执行循环里必须检查标志
+  const runFn = html.slice(html.indexOf('async function runZipQueue'), html.indexOf('async function runZipQueue') + 1800);
+  assert.ok(/if \(zipBatch\.paused\) break/.test(runFn), '循环里必须检查暂停标志');
+  assert.ok(/it\.status = 'failed'/.test(runFn), '单张失败应记为失败并继续下一张');
+});
+
+test('整包识别：结果走与单张识别相同的核对入库路径', () => {
+  // 不另起一套入库流程，避免两处行为不一致
+  const fn = html.slice(html.indexOf('function collectZipResults'), html.indexOf('function collectZipResults') + 900);
+  assert.ok(/pending = all/.test(fn), '应把结果放进 pending');
+  assert.ok(/renderReview/.test(fn), '应走同一个核对页');
+});
