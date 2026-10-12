@@ -45,22 +45,61 @@ function json(res, status, obj) {
   res.end(body);
 }
 
-function readBody(req, limit = 40 * 1024 * 1024) {
+/** 默认请求体上限：图片走 base64（会放大 33%），所以给得宽一些。 */
+const DEFAULT_BODY_LIMIT = 60 * 1024 * 1024;
+
+/**
+ * 读取请求体。
+ * @param {object} req
+ * @param {number} limit 字节上限
+ * @param {boolean} asBuffer true 返回 Buffer（二进制上传用），false 返回 UTF-8 字符串
+ *
+ * 超限时**不立刻 destroy**：先让事件循环把响应写出去，
+ * 否则浏览器只会看到"连接被重置"，用户以为卡住了却不知道原因（实测踩过：
+ * 65MB 的 zip 转 base64 后约 87MB，超过上限后界面一直转圈）。
+ */
+function readBody(req, limit = DEFAULT_BODY_LIMIT, asBuffer = false) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
+    let aborted = false;
     req.on('data', (c) => {
       size += c.length;
       if (size > limit) {
-        reject(new Error('请求体过大（图片上限 40MB）'));
-        req.destroy();
+        if (!aborted) {
+          aborted = true;
+          const mb = (limit / 1048576).toFixed(0);
+          const err = new Error(`文件太大：超过上限 ${mb} MB。请分卷压缩，或先把图片压缩一遍再打包`);
+          err.code = 'BODY_TOO_LARGE';
+          reject(err);
+        }
+        // 继续把流读掉（不 destroy），让服务端能把 4xx 响应完整送出去
         return;
       }
       chunks.push(c);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (aborted) return;
+      const buf = Buffer.concat(chunks);
+      resolve(asBuffer ? buf : buf.toString('utf8'));
+    });
+    req.on('error', (e) => {
+      if (!aborted) reject(e);
+    });
   });
+}
+
+/**
+ * 二进制上传通道：原样接收文件字节，不做任何编码转换。
+ *
+ * 为什么单独开一条：走 JSON 必须把二进制转成 base64（体积 +33%），
+ * 65MB 的压缩包会变成 87MB —— 既慢，又容易撞上限，内存还要同时留两份。
+ * 这条路直接把字节送进来，省掉全部这些开销。
+ *
+ * 鉴权与 /api/invoke 一致：token 走查询参数或 x-dsh-token 头。
+ */
+function readRawUpload(req, limit) {
+  return readBody(req, limit, true);
 }
 
 /**
@@ -75,7 +114,18 @@ function readBody(req, limit = 40 * 1024 * 1024) {
  * @returns {{server:import('node:http').Server, host:object, token:string, url:string}}
  */
 function createShell(opts) {
-  const { port, host: hostAddr, dataDir, readAsset, shellName = 'node-http', quiet = false } = opts;
+  const {
+    port,
+    host: hostAddr,
+    dataDir,
+    readAsset,
+    shellName = 'node-http',
+    quiet = false,
+    // 二进制上传（整包 zip）的上限。给得宽是因为这条路不做编码转换，
+    // 65MB 的压缩包就是 65MB；而走 JSON 时同样的包会变成 87MB。
+    // 可用 UPLOAD_LIMIT_MB 环境变量覆盖（例如遇到特别大的包）。
+    uploadLimit = (Number(process.env.UPLOAD_LIMIT_MB) || 200) * 1024 * 1024,
+  } = opts;
   const log = quiet ? () => {} : (...a) => console.log(...a);
   const token = loadToken(dataDir);
   const appHost = createHost({ dataDir });
@@ -112,12 +162,58 @@ function createShell(opts) {
         const raw = await readBody(req);
         payload = raw ? JSON.parse(raw) : {};
       } catch (e) {
-        json(res, 400, { ok: false, error: `请求解析失败：${e.message}` });
+        // 体积超限单独给出可操作的提示（而不是笼统的"解析失败"）
+        json(res, e.code === 'BODY_TOO_LARGE' ? 413 : 400, {
+          ok: false,
+          error: e.code === 'BODY_TOO_LARGE' ? e.message : `请求解析失败：${e.message}`,
+          code: e.code || '',
+        });
         return;
       }
       const { channel, args } = payload;
       const result = await appHost.invoke(channel, args);
       json(res, 200, result);
+      return;
+    }
+
+    /**
+     * 二进制上传：原样接收文件字节（不转 base64）。
+     * 目前用于整包识别上传 ZIP。查询参数 channel 指定要调用的动作，
+     * 外壳把收到的 Buffer 放进 args.bytes 传给宿主。
+     */
+    if (req.method === 'POST' && pathname === '/api/upload') {
+      const channel = url.searchParams.get('channel') || '';
+      if (!channel) {
+        json(res, 400, { ok: false, error: '缺少 channel 参数' });
+        return;
+      }
+      let bytes;
+      let extra = {};
+      try {
+        bytes = await readRawUpload(req, uploadLimit);
+        // 允许通过头传一些简单参数（例如答案标记），避免再走一次请求
+        const rawExtra = req.headers['x-dsh-args'];
+        if (rawExtra) {
+          try {
+            extra = JSON.parse(Buffer.from(String(rawExtra), 'base64').toString('utf8'));
+          } catch {
+            extra = {};
+          }
+        }
+      } catch (e) {
+        json(res, e.code === 'BODY_TOO_LARGE' ? 413 : 400, {
+          ok: false,
+          error: e.code === 'BODY_TOO_LARGE' ? e.message : `读取上传内容失败：${e.message}`,
+          code: e.code || '',
+        });
+        return;
+      }
+      try {
+        const result = await appHost.invoke(channel, { ...extra, bytes });
+        json(res, 200, result);
+      } catch (e) {
+        json(res, 500, { ok: false, error: e.message });
+      }
       return;
     }
 
@@ -127,6 +223,9 @@ function createShell(opts) {
         shell: shellName,
         dataDir,
         hasApiKey: Boolean(appHost.store.get().apiKey),
+        // 把上限告诉界面，让它在选文件时就能预检 ——
+        // 免得前后端各写一个数字，改了一边忘了另一边
+        uploadLimitBytes: uploadLimit,
       });
       return;
     }
@@ -184,6 +283,35 @@ function createShell(opts) {
         body: JSON.stringify({ channel, args: payload || {} }),
       });
       return r.json();
+    },
+    /**
+     * 上传二进制内容（整包 zip 用）。
+     *
+     * 为什么不复用 invoke：invoke 走 JSON，二进制必须先转 base64（体积 +33%）。
+     * 65MB 的压缩包会变成 87MB，既慢又容易撞上限。这条通道原样传字节。
+     * 渲染层只调用 dsh.upload(...)，不需要知道外壳是怎么实现的。
+     */
+    upload: async (channel, bytes, extraArgs) => {
+      const headers = { 'Content-Type': 'application/octet-stream', 'x-dsh-token': token || '' };
+      if (extraArgs) {
+        try {
+          headers['x-dsh-args'] = btoa(unescape(encodeURIComponent(JSON.stringify(extraArgs))));
+        } catch (e) { /* 参数编不了就不带，宿主会用默认值 */ }
+      }
+      const r = await fetch('/api/upload?channel=' + encodeURIComponent(channel), {
+        method: 'POST',
+        headers,
+        body: bytes,
+      });
+      let data = null;
+      try {
+        data = await r.json();
+      } catch (e) {
+        // 服务端返回了非 JSON（例如被中间层拦掉），给出可理解的说明
+        throw new Error('上传失败（HTTP ' + r.status + '）');
+      }
+      if (!r.ok && data && data.error) return data;
+      return data;
     },
   pickImage: async () => {
     // 浏览器没有系统文件对话框的能力，用隐藏的 file input 实现同样的语义：

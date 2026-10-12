@@ -193,6 +193,32 @@ const INVOKE = async (channel, payload) => {
   if (!window.dsh) throw new Error('未连接到宿主（window.dsh 不存在）');
   return window.dsh.invoke(channel, payload);
 };
+
+/**
+ * 二进制上传（整包 zip 用）。走宿主单独的通道，不做 base64 转换。
+ * 宿主不支持时给出明确说明，而不是静默失败。
+ */
+const UPLOAD = async (channel, bytes, extraArgs) => {
+  if (!window.dsh) throw new Error('未连接到宿主（window.dsh 不存在）');
+  if (!window.dsh.upload) throw new Error('当前宿主不支持二进制上传，请重启程序后再试');
+  return window.dsh.upload(channel, bytes, extraArgs);
+};
+
+/**
+ * ZIP 上传上限。默认 200MB，启动后从 /api/health 读到真实值再覆盖
+ * —— 避免前后端各写一个数字，改了一边忘了另一边。
+ */
+let ZIP_UPLOAD_LIMIT = 200 * 1024 * 1024;
+(async () => {
+  try {
+    const r = await fetch('/api/health');
+    const j = await r.json();
+    if (j && j.uploadLimitBytes) ZIP_UPLOAD_LIMIT = j.uploadLimitBytes;
+  } catch (e) {
+    /* 读不到就用默认值，不影响使用 */
+  }
+})();
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -792,6 +818,10 @@ A. completes  B. completed  C. was completed  D. has completed
             <button class="btn ghost" id="zipPauseBtn" style="display:none">暂停</button>
             <button class="btn ghost" id="zipClearBtn" style="display:none">清空这批</button>
           </div>
+          <label class="row" style="margin-top:10px;gap:8px;color:var(--muted);font-size:12.5px">
+            <input type="checkbox" id="zipCompress" checked style="width:auto" />
+            上传前自动压缩图片（长边缩到 1600、转 JPEG）—— 更快更省，识别准确率基本不受影响
+          </label>
           <div id="zipOut" style="margin-top:12px"></div>
         </div>
 
@@ -1006,19 +1036,34 @@ Answers: 21-B  22-C  23-B`;
                 it.status === 'done'
                   ? `<span class="okc">✓ ${it.questions} 题</span>`
                   : it.status === 'running'
-                    ? '<span class="spin"></span> 识别中'
+                    ? `<span class="spin"></span> ${it.stage === 'compressing' ? '压缩中' : it.stage === 'recognizing' ? '识别中' : '处理中'}`
                     : it.status === 'failed'
                       ? `<span class="crit">✗ ${esc(it.error || '失败')}</span>`
                       : '<span class="muted">待识别</span>';
+              // 体积信息：让用户看到压缩到底省了多少
+              const sizeInfo =
+                it.originalBytes && it.bytes && it.bytes < it.originalBytes
+                  ? `<span class="muted">${fmtBytes(it.originalBytes)} → ${fmtBytes(it.bytes)}</span>`
+                  : it.size
+                    ? `<span class="muted">${fmtBytes(it.size)}</span>`
+                    : '';
               return `<tr>
                 <td style="color:var(--muted);white-space:nowrap">#${it.index}</td>
-                <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name)}</td>
+                <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(it.name)}">${esc(it.name)}</td>
+                <td style="white-space:nowrap">${sizeInfo}</td>
                 <td style="white-space:nowrap">${mark}</td>
               </tr>`;
             })
             .join('')}</tbody>
         </table>
       </div>
+      ${
+        items.some((i) => i.savedBytes)
+          ? `<div class="muted" style="margin-top:8px;font-size:12px">
+              压缩共省下 ${fmtBytes(items.reduce((a, b) => a + (b.savedBytes || 0), 0))}（识别准确率基本不受影响）
+            </div>`
+          : ''
+      }
       ${
         failedList.length
           ? `<div class="row" style="margin-top:10px">
@@ -1068,9 +1113,30 @@ Answers: 21-B  22-C  23-B`;
           renderZipQueue();
           continue;
         }
+
+        // 上传前瘦身：手机原图常有 3-5MB，读图模型内部也就用约 1024 token，
+        // 缩到长边 1600 再转 JPEG 几乎不损识别率，却大幅减少传输与耗时。
+        it.stage = 'compressing';
+        renderZipQueue();
+        let imageBase64 = got.imageBase64;
+        let mime = got.mime || it.mime;
+        if ($('#zipCompress').checked) {
+          const c = await compressImageDataUrl(`data:${mime};base64,${got.imageBase64}`);
+          if (c.compressed) {
+            imageBase64 = c.dataUrl.split(',')[1] || imageBase64;
+            mime = 'image/jpeg';
+            it.savedBytes = (it.savedBytes || 0) + (c.originalBytes - c.bytes);
+          }
+          it.note = c.reason;
+          it.originalBytes = c.originalBytes;
+          it.bytes = c.bytes;
+        }
+
+        it.stage = 'recognizing';
+        renderZipQueue();
         const r = await INVOKE('capture:extract', {
-          imageBase64: got.imageBase64,
-          mime: got.mime || it.mime,
+          imageBase64,
+          mime,
           answerInSource: $('#hasAnswer').checked,
         });
         if (!r.ok) {
@@ -1087,6 +1153,7 @@ Answers: 21-B  22-C  23-B`;
         it.status = 'failed';
         it.error = e.message || '识别异常';
       }
+      it.stage = '';
       renderZipQueue();
     }
 
@@ -1136,23 +1203,50 @@ Answers: 21-B  22-C  23-B`;
     if (!file) return;
     const out = $('#zipOut');
     const mb = (file.size / 1048576).toFixed(1);
-    out.innerHTML = `<div class="hintbox"><span class="spin"></span> 正在解包 ${esc(file.name)}（${mb} MB）…</div>`;
+
+    // 大小预检：超限就当场说清楚，不白等一次上传再被拒
+    if (file.size > ZIP_UPLOAD_LIMIT) {
+      out.innerHTML = `<div class="warnbox">
+        <b>这个压缩包 ${mb} MB，超过了 ${(ZIP_UPLOAD_LIMIT / 1048576).toFixed(0)} MB 的上限。</b>
+        <div class="muted" style="margin-top:8px">
+          两个办法：<br>
+          ① 分成几个小包，分几次导入（推荐，最省事）<br>
+          ② 先把里面的试卷照片压缩一遍再打包 —— 手机原图常有 3-5MB，
+             压到 1MB 对识别准确率几乎没有影响
+        </div>
+      </div>`;
+      $('#zipFile').value = '';
+      return;
+    }
+
+    out.innerHTML = `<div class="hintbox"><span class="spin"></span> 正在读取文件 ${esc(file.name)}（${mb} MB）…</div>`;
 
     // 先释放上一批，避免内存叠加
     await INVOKE('capture:zipClear', {});
 
-    const base64 = await new Promise((resolve, reject) => {
+    // 读成 ArrayBuffer：**不做 base64 转换**
+    // （base64 会让体积涨 33%，65MB 的包会变成 87MB，既慢又容易撞上限）
+    const buf = await new Promise((resolve) => {
       const fr = new FileReader();
-      fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
-      fr.onerror = () => reject(new Error('读取文件失败'));
-      fr.readAsDataURL(file);
-    }).catch((err) => {
-      out.innerHTML = `<div class="warnbox">${esc(err.message)}</div>`;
-      return null;
-    });
-    if (base64 === null) return;
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => resolve(null);
+      fr.readAsArrayBuffer(file);
+    }).catch(() => null);
+    if (!buf) {
+      out.innerHTML = `<div class="warnbox">读取文件失败，请重新选择</div>`;
+      return;
+    }
 
-    const r = await INVOKE('capture:unzip', { zipBase64: base64 });
+    out.innerHTML = `<div class="hintbox"><span class="spin"></span> 正在解压 ${esc(file.name)}（${mb} MB）…</div>`;
+
+    // 走二进制上传通道：原样传字节
+    let r;
+    try {
+      r = await UPLOAD('capture:unzipBinary', buf);
+    } catch (err) {
+      out.innerHTML = `<div class="warnbox"><b>上传失败：</b>${esc(err.message)}</div>`;
+      return;
+    }
     if (!r.ok) {
       out.innerHTML = `<div class="warnbox"><b>解包失败：</b>${esc(r.error)}</div>`;
       zipBatch = { importId: '', items: [], running: false, paused: false };
@@ -1175,7 +1269,7 @@ Answers: 21-B  22-C  23-B`;
         : '';
     // 队列渲染在同一条提示下面：先写提示，再由 renderZipQueue 追加进度表
     out.innerHTML = `<div class="hintbox">
-      ${esc(r.message)}，合计 ${totalMB} MB。点「开始逐张识别」逐张处理。
+      ${esc(r.message)}，解压后合计 ${totalMB} MB。点「开始逐张识别」逐张处理。
       ${skippedNote}
     </div><div id="zipQueue"></div>`;
     renderZipQueue();
@@ -1534,12 +1628,105 @@ async function filesToBase64(files) {
   return out;
 }
 
+/* ---------------------------- 图片压缩（上传前瘦身） ---------------------------- */
+
+/**
+ * 压缩上限：长边超过这个像素就缩小。
+ * 读图模型内部也会把图片压到约 1024 token 处理，再大的分辨率用不上，
+ * 所以缩到这个尺寸几乎不损识别准确率，却能显著减少上传体积。
+ */
+const COMPRESS_MAX_DIM = 1600;
+/** JPEG 质量。0.85 对印刷体试卷足够清晰。 */
+const COMPRESS_QUALITY = 0.85;
+/** 小于这个大小就不再压（压了也省不了多少，还多一次画布开销）。 */
+const COMPRESS_MIN_BYTES = 400 * 1024;
+
+/**
+ * 压缩一张 data URL 图片。
+ *
+ * 策略：
+ *   - 用浏览器自带的 canvas（零依赖，不引入 sharp 之类）
+ *   - 先探测原始像素尺寸：**尺寸不大且体积不大就直接返回原图**，
+ *     避免"本来很小的图"被重新编码反而变模糊
+ *   - PNG 常见于截图（文字锐利、体积大），转成 JPEG 能省很多且不影响识别
+ *
+ * 失败时返回原图 —— 压缩只是优化，不能因为它让流程走不下去。
+ *
+ * @param {string} dataUrl 形如 data:image/png;base64,...
+ * @returns {Promise<{dataUrl:string, originalBytes:number, bytes:number, width:number, height:number, compressed:boolean, reason:string}>}
+ */
+async function compressImageDataUrl(dataUrl) {
+  const m = /^data:([^;,]+);base64,(.*)$/s.exec(String(dataUrl || ''));
+  if (!m) return { dataUrl, originalBytes: 0, bytes: 0, compressed: false, reason: '格式不认识' };
+  const mime = m[1];
+  const originalBytes = Math.floor((m[2].length * 3) / 4);
+
+  const img = await new Promise((resolve) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => resolve(null);
+    i.src = dataUrl;
+  });
+  if (!img) {
+    return { dataUrl, originalBytes, bytes: originalBytes, compressed: false, reason: '图片无法解码' };
+  }
+  const w0 = img.naturalWidth || img.width;
+  const h0 = img.naturalHeight || img.height;
+  const maxSide = Math.max(w0, h0);
+
+  // 又小又不大：原样用
+  if (originalBytes <= COMPRESS_MIN_BYTES && maxSide <= COMPRESS_MAX_DIM) {
+    return { dataUrl, originalBytes, bytes: originalBytes, compressed: false, reason: '本来就小', width: w0, height: h0 };
+  }
+
+  const scale = maxSide > COMPRESS_MAX_DIM ? COMPRESS_MAX_DIM / maxSide : 1;
+  const w = Math.max(1, Math.round(w0 * scale));
+  const h = Math.max(1, Math.round(h0 * scale));
+
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    // JPEG 不支持透明，先铺白底，否则透明区域会变黑
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const out = canvas.toDataURL('image/jpeg', COMPRESS_QUALITY);
+    const outBytes = Math.floor(((out.split(',')[1] || '').length * 3) / 4);
+    // 万一压完反而更大（例如原本就是优化过的 JPEG），就用原图
+    if (outBytes >= originalBytes) {
+      return {
+        dataUrl, originalBytes, bytes: originalBytes, compressed: false,
+        reason: '压了之后反而更大', width: w0, height: h0,
+      };
+    }
+    return {
+      dataUrl: out,
+      originalBytes,
+      bytes: outBytes,
+      compressed: true,
+      reason: scale < 1 ? `缩到 ${w}×${h} 并转 JPEG` : '转 JPEG 瘦身',
+      width: w,
+      height: h,
+    };
+  } catch (e) {
+    return { dataUrl, originalBytes, bytes: originalBytes, compressed: false, reason: `压缩失败：${e.message}` };
+  }
+}
+
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
 /**
  * 选图。优先用宿主能力（window.dsh.pickImage）；
  * 没有时退化为页面内的隐藏 file input。两条路返回同一种结构。
  */
-async function pickImages() {
-  if (window.dsh && window.dsh.pickImage) {
+async function pickImages() {  if (window.dsh && window.dsh.pickImage) {
     try {
       const r = await window.dsh.pickImage();
       if (r && r.ok) return r.files || [];

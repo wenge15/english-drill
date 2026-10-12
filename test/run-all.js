@@ -24,6 +24,8 @@ const skipHttp = args.includes('--no-http');
 // 单个测试文件的硬超时。
 // 踩过的坑：某条测试忘了关闭它自己启动的假 HTTP 服务器，进程就一直挂着不退出，
 // 整个套件卡死而且不报错（实际卡了两分钟才发现）。这里加超时，超时按失败处理。
+// 另一个坑：被 kill 时输出可能只写了一半，于是"通过数"莫名变少
+// （实测出现过 352 → 348 的漂移）。所以下面遇到异常退出会明确标注"数字不完整"。
 const TIMEOUT_MS = Number(process.env.TEST_TIMEOUT_MS || 120000);
 
 const files = fs
@@ -98,6 +100,11 @@ if (failures.length > 0) {
 }
 
 process.stdout.write(`合计：${totalPass} 项通过，${totalFail} 项失败\n`);
+if (failures.length > 0) {
+  // 有文件异常退出时，各文件的输出可能不完整，合计数字会偏小 —— 说清楚，
+  // 免得看到 348 而不是 352 时误以为是"少跑了几项测试"
+  process.stdout.write('（注意：上面有文件异常退出，它的输出可能不完整，合计数字可能偏小）\n');
+}
 if (skipHttp) {
   process.stdout.write('（按要求跳过了 http.test.js）\n');
 }

@@ -79,6 +79,72 @@ function createHost(opts) {
     };
   };
 
+  /**
+   * 处理一个压缩包字节流：挑出图片、暂存、返回清单。
+   *
+   * 抽成共用函数是因为有两条上传路径（base64 与二进制），
+   * 它们之后的处理必须完全一致 —— 分两份写迟早会走偏。
+   */
+  function processZipBuffer(buf, limit = 300) {
+    if (!buf || buf.length === 0) return { ok: false, error: '文件是空的' };
+
+    let result;
+    try {
+      result = zip.extractImages(buf, { limit });
+    } catch (e) {
+      // 把"为什么读不了"如实告诉用户，而不是笼统报错
+      return { ok: false, error: e.message };
+    }
+
+    if (result.images.length === 0) {
+      return {
+        ok: false,
+        error:
+          '这个压缩包里没有找到图片（支持 jpg/jpeg/png/gif/webp/bmp）。' +
+          '如果题目是 PDF 或 Word，请先截图或导出为图片再打包。',
+        skipped: result.skipped,
+        errors: result.errors,
+      };
+    }
+
+    // 丢弃上一批未消费的暂存，避免内存叠加
+    batchStore.clear();
+    const importId = `zip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const items = result.images.map((img, i) => {
+      const itemId = `${importId}_${i}`;
+      batchStore.set(itemId, { bytes: img.bytes, mime: img.mime, name: img.name, size: img.size });
+      return {
+        itemId,
+        name: img.name,
+        mime: img.mime,
+        size: img.size,
+        // 序号用于界面显示"第 N / 共 M 张"
+        index: i + 1,
+      };
+    });
+
+    return {
+      ok: true,
+      importId,
+      items,
+      total: items.length,
+      totalBytes: items.reduce((a, b) => a + b.size, 0),
+      skipped: result.skipped,
+      // 区分"本来就不是图片"和"是图片但读不出来"，便于用户判断要不要重压
+      junkSkipped: result.junkSkipped || 0,
+      nonImageSkipped: result.nonImageSkipped || 0,
+      failed: result.failed || 0,
+      errors: result.errors,
+      truncated: result.truncated,
+      message:
+        `从压缩包里取出 ${items.length} 张图片` +
+        (result.nonImageSkipped ? `，跳过 ${result.nonImageSkipped} 个非图片文件` : '') +
+        (result.junkSkipped ? `，忽略 ${result.junkSkipped} 个系统垃圾文件` : '') +
+        (result.failed ? `，有 ${result.failed} 张图片读取失败` : '') +
+        (result.truncated ? `，已达上限 ${limit} 张` : ''),
+    };
+  }
+
   const actions = {
     // ---------- 题库 ----------
     'questions:list': (payload = {}) => {
@@ -196,63 +262,24 @@ function createHost(opts) {
       } catch {
         return { ok: false, error: '文件内容解析失败，请重新选择' };
       }
-      if (buf.length === 0) return { ok: false, error: '文件是空的' };
+      return processZipBuffer(buf, limit);
+    },
 
-      let result;
-      try {
-        result = zip.extractImages(buf, { limit });
-      } catch (e) {
-        // 把"为什么读不了"如实告诉用户，而不是笼统报错
-        return { ok: false, error: e.message };
+    /**
+     * 二进制解包：直接从外壳的原始上传通道接收压缩包字节。
+     *
+     * 为什么需要它：走 JSON 时必须把二进制转成 base64，体积涨 33%
+     * （65MB 的包会变成 87MB），既慢又容易撞上请求体上限，
+     * 而且内存里要同时存在原始字节和 base64 字符串两份。
+     * 这条通道原样传输，不做任何编码转换。
+     *
+     * bytes 由 HTTP 外壳解析请求体后以 Buffer 传入。
+     */
+    'capture:unzipBinary': ({ bytes, limit = 300 }) => {
+      if (!bytes || !Buffer.isBuffer(bytes) || bytes.length === 0) {
+        return { ok: false, error: '没有收到文件内容' };
       }
-
-      if (result.images.length === 0) {
-        return {
-          ok: false,
-          error:
-            '这个压缩包里没有找到图片（支持 jpg/jpeg/png/gif/webp/bmp）。' +
-            '如果题目是 PDF 或 Word，请先截图或导出为图片再打包。',
-          skipped: result.skipped,
-          errors: result.errors,
-        };
-      }
-
-      // 丢弃上一批未消费的暂存，避免内存叠加
-      batchStore.clear();
-      const importId = `zip_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const items = result.images.map((img, i) => {
-        const itemId = `${importId}_${i}`;
-        batchStore.set(itemId, { bytes: img.bytes, mime: img.mime, name: img.name });
-        return {
-          itemId,
-          name: img.name,
-          mime: img.mime,
-          size: img.size,
-          // 序号用于界面显示"第 N / 共 M 张"
-          index: i + 1,
-        };
-      });
-
-      return {
-        ok: true,
-        importId,
-        items,
-        total: items.length,
-        totalBytes: items.reduce((a, b) => a + b.size, 0),
-        skipped: result.skipped,
-        // 区分"本来就不是图片"和"是图片但读不出来"，便于用户判断要不要重压
-        junkSkipped: result.junkSkipped || 0,
-        nonImageSkipped: result.nonImageSkipped || 0,
-        failed: result.failed || 0,
-        errors: result.errors,
-        truncated: result.truncated,
-        message:
-          `从压缩包里取出 ${items.length} 张图片` +
-          (result.nonImageSkipped ? `，跳过 ${result.nonImageSkipped} 个非图片文件` : '') +
-          (result.junkSkipped ? `，忽略 ${result.junkSkipped} 个系统垃圾文件` : '') +
-          (result.failed ? `，有 ${result.failed} 张图片读取失败` : '') +
-          (result.truncated ? `，已达上限 ${limit} 张` : ''),
-      };
+      return processZipBuffer(bytes, limit);
     },
 
     /** 取暂存图片中的一张（供界面逐张送入识别）。 */

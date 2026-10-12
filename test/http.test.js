@@ -41,9 +41,69 @@ const check = (name, cond, extra = '') => {
   }
 };
 
+/** 手工构造一个 ZIP（不引打包依赖），用于测二进制上传通道。 */
+function makeTestZip(files) {
+  const zlib = require('node:zlib');
+  const crc32 = (buf) => {
+    let table = crc32.t;
+    if (!table) {
+      table = crc32.t = new Int32Array(256);
+      for (let i = 0; i < 256; i += 1) {
+        let c = i;
+        for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        table[i] = c;
+      }
+    }
+    let c = -1;
+    for (let i = 0; i < buf.length; i += 1) c = (c >>> 8) ^ table[(c ^ buf[i]) & 0xff];
+    return (c ^ -1) >>> 0;
+  };
+
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const f of files) {
+    const nb = Buffer.from(f.name, 'utf8');
+    const data = Buffer.isBuffer(f.data) ? f.data : Buffer.from(f.data, 'utf8');
+    const comp = zlib.deflateRawSync(data);
+    const crc = crc32(data);
+    const l = Buffer.alloc(30);
+    l.writeUInt32LE(0x04034b50, 0);
+    l.writeUInt16LE(20, 4);
+    l.writeUInt16LE(0x800, 6);
+    l.writeUInt16LE(8, 8);
+    l.writeUInt32LE(crc, 14);
+    l.writeUInt32LE(comp.length, 18);
+    l.writeUInt32LE(data.length, 22);
+    l.writeUInt16LE(nb.length, 26);
+    locals.push(l, nb, comp);
+
+    const c = Buffer.alloc(46);
+    c.writeUInt32LE(0x02014b50, 0);
+    c.writeUInt16LE(20, 4);
+    c.writeUInt16LE(20, 6);
+    c.writeUInt16LE(0x800, 8);
+    c.writeUInt16LE(8, 10);
+    c.writeUInt32LE(crc, 16);
+    c.writeUInt32LE(comp.length, 20);
+    c.writeUInt32LE(data.length, 24);
+    c.writeUInt16LE(nb.length, 28);
+    c.writeUInt32LE(offset, 42);
+    centrals.push(c, nb);
+    offset += l.length + nb.length + comp.length;
+  }
+  const cen = Buffer.concat(centrals);
+  const e = Buffer.alloc(22);
+  e.writeUInt32LE(0x06054b50, 0);
+  e.writeUInt16LE(files.length, 8);
+  e.writeUInt16LE(files.length, 10);
+  e.writeUInt32LE(cen.length, 12);
+  e.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, cen, e]);
+}
+
 /** 起一个独立外壳，界面从磁盘读（与开发时一致）。 */
-async function startShell() {
-  const rendererDir = path.join(__dirname, '..', 'desktop', 'renderer');
+async function startShell() {  const rendererDir = path.join(__dirname, '..', 'desktop', 'renderer');
   const shell = createShell({
     port: PORT,
     host: '127.0.0.1',
@@ -127,6 +187,115 @@ async function main() {
   check('界面能正常返回', page.includes('<!DOCTYPE html>') && page.includes('英语练习'));
   check('注入了 window.dsh 桥', page.includes('window.dsh ='));
   // 这条以前写反了：原来是 check('桥里带上了 token', page.includes(token))，
+  // 那等于要求 token 被内联进公开页面 —— 正是那个漏洞。现在断言它**不在**页面里。
+  check('页面里不含 token（避免被本机任意进程抓走）', !page.includes(token));
+  check('桥提供二进制上传方法（整包 zip 用）', page.includes('upload:'), '渲染层要靠它走二进制通道');
+
+  console.log('\n[HTTP 外壳] 二进制上传（整包 ZIP）');
+  const health = await fetch(`${BASE}/api/health`).then((r) => r.json());
+  check('健康检查暴露上传上限（界面用来预检）',
+    typeof health.uploadLimitBytes === 'number' && health.uploadLimitBytes > 0,
+    JSON.stringify(health).slice(0, 160));
+  check('上传上限足够大（默认 200MB）', health.uploadLimitBytes >= 200 * 1024 * 1024,
+    `实际 ${(health.uploadLimitBytes / 1048576).toFixed(0)} MB`);
+
+  // 造一个小 zip（含 2 张图 + 1 个非图片）
+  const tinyPng = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const zipBuf = makeTestZip([
+    { name: '第一单元/1.png', data: tinyPng },
+    { name: '第一单元/2.png', data: tinyPng },
+    { name: 'readme.txt', data: 'not an image' },
+  ]);
+
+  const upRes = await fetch(`${BASE}/api/upload?channel=capture:unzipBinary`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'x-dsh-token': token },
+    body: zipBuf,
+  });
+  const upBody = await upRes.json();
+  check('二进制上传解包成功', upRes.status === 200 && upBody.ok === true,
+    `HTTP ${upRes.status} ${JSON.stringify(upBody).slice(0, 160)}`);
+  check('取出 2 张图片（非图片被跳过）', (upBody.items || []).length === 2,
+    `实际 ${(upBody.items || []).length}`);
+  check('如实报告跳过了非图片文件', upBody.nonImageSkipped === 1, JSON.stringify(upBody).slice(0, 160));
+
+  // 逐张取回
+  if (upBody.items && upBody.items.length) {
+    const got = await invoke('capture:zipItem', { itemId: upBody.items[0].itemId });
+    check('能逐张取回暂存的图片', got.ok === true && (got.imageBase64 || '').length > 0,
+      JSON.stringify(got).slice(0, 160));
+  }
+
+  // 无 token 必须被拦（二进制通道同样受鉴权保护）
+  const uploadNoToken = await fetch(`${BASE}/api/upload?channel=capture:unzipBinary`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: zipBuf,
+  });
+  check('二进制上传没有 token 会被拒绝', uploadNoToken.status === 403, `实际 ${uploadNoToken.status}`);
+
+  // 缺 channel 参数
+  const noChannel = await fetch(`${BASE}/api/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'x-dsh-token': token },
+    body: zipBuf,
+  });
+  check('缺少 channel 参数时报错', noChannel.status === 400, `实际 ${noChannel.status}`);
+
+  // 不是 zip 的内容要给出可理解的错误，而不是 500
+  const notZip = await fetch(`${BASE}/api/upload?channel=capture:unzipBinary`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'x-dsh-token': token },
+    body: Buffer.from('这不是一个压缩包，只是一段普通文字'),
+  });
+  const notZipBody = await notZip.json();
+  check('上传非 ZIP 内容时给出可理解的错误',
+    notZip.status === 200 && notZipBody.ok === false && /不是有效的 ZIP/.test(notZipBody.error || ''),
+    `HTTP ${notZip.status} ${JSON.stringify(notZipBody).slice(0, 160)}`);
+
+  // 空 body
+  const empty = await fetch(`${BASE}/api/upload?channel=capture:unzipBinary`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'x-dsh-token': token },
+    body: Buffer.alloc(0),
+  });
+  const emptyBody = await empty.json();
+  check('空上传内容给出明确错误', emptyBody.ok === false, JSON.stringify(emptyBody).slice(0, 160));
+
+  // 超限 → 413 且带可操作的说明（这正是用户"一直转圈"的根因修复）
+  //
+  // 用**另一个小上限的实例**来测，而不是往主实例灌 200MB：
+  // 分配 200MB 会给整个测试进程带来内存压力（实测出现过偶发失败）。
+  // 换个上限走的是同一条判断逻辑，验证效果一样，开销小得多。
+  const tinyPort = PORT + 1;
+  const tinyShell = createShell({
+    port: tinyPort,
+    host: '127.0.0.1',
+    dataDir: DATA_DIR,
+    shellName: 'test-tiny-limit',
+    uploadLimit: 1 * 1024 * 1024, // 1MB，方便用小数据触发超限
+    readAsset: () => null,
+  });
+  await listen(tinyShell, tinyPort, '127.0.0.1');
+  const tooBig = await fetch(`http://127.0.0.1:${tinyPort}/api/upload?channel=capture:unzipBinary`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'x-dsh-token': token },
+    body: Buffer.alloc(2 * 1024 * 1024), // 2MB，超过上面设的 1MB
+  });
+  const tooBigBody = await tooBig.json();
+  check('超过上传上限时返回 413 而不是掐断连接', tooBig.status === 413,
+    `实际 ${tooBig.status}`);
+  check('超限响应里有可操作的说明', /超过上限/.test(tooBigBody.error || ''),
+    JSON.stringify(tooBigBody).slice(0, 200));
+  tinyShell.server.close();
+  tinyShell.host.close();
+
+  // 服务被拒绝大请求后仍然健康
+  const aliveAfterBig = await fetch(`${BASE}/api/health`);
+  check('超限请求之后服务仍然存活', aliveAfterBig.status === 200, `实际 ${aliveAfterBig.status}`);
   // 等于把"公开页泄露 token"这个漏洞当成期望行为锁住了。
   // 正确的不变量是：**任何返回给浏览器的 HTML 都不能含 token**。
   check('桥里不得内联 token（安全不变量）', !page.includes(token), '页面里出现了 token');

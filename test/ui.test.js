@@ -294,3 +294,34 @@ test('整包识别：结果走与单张识别相同的核对入库路径', () =>
   assert.ok(/pending = all/.test(fn), '应把结果放进 pending');
   assert.ok(/renderReview/.test(fn), '应走同一个核对页');
 });
+
+test('整包识别：上传前压缩图片（更快更省，不损识别率）', () => {
+  assert.ok(/id="zipCompress"/.test(html), '应有"上传前压缩"开关');
+  assert.ok(/async function compressImageDataUrl/.test(html), '应有压缩函数');
+  assert.ok(/COMPRESS_MAX_DIM/.test(html) && /COMPRESS_QUALITY/.test(html), '应有尺寸与质量参数');
+  // 用浏览器自带 canvas，不引第三方图像库
+  assert.ok(/createElement\('canvas'\)/.test(html), '应使用 canvas 压缩');
+  assert.ok(/toDataURL\('image\/jpeg'/.test(html), '应转成 JPEG（PNG 截图通常很大）');
+  // JPEG 不支持透明，必须先铺白底，否则透明区域会变黑
+  assert.ok(/fillStyle = '#fff'/.test(html), '应先铺白底再画（避免透明区域变黑）');
+  // 小图不该被重新编码（反而可能变糊、变大）
+  assert.ok(/COMPRESS_MIN_BYTES/.test(html), '应有"太小的图不压"的下限');
+
+  // 压缩只是优化，不能因为它让流程走不下去
+  assert.ok(/压缩失败/.test(html), '压缩失败时应回退原图');
+  assert.ok(/压了之后反而更大/.test(html), '压完更大时应回退原图');
+});
+
+test('整包识别：超限当场说清楚，而不是白等一次上传', () => {
+  // 踩过的坑：65MB 的包转 base64 后 87MB，超限被拒且连接被掐断，界面一直转圈
+  assert.ok(/ZIP_UPLOAD_LIMIT/.test(html), '应有上传上限常量');
+  assert.ok(/超过了/.test(html), '应提示超过了多少');
+  assert.ok(/uploadLimitBytes/.test(html), '上限应从服务端读，避免前后端各写一个数字');
+  // 预检必须在读取文件之前
+  const from = html.indexOf("$('#zipFile').onchange");
+  const handler = html.slice(from, from + 1800);
+  const preCheck = handler.indexOf('ZIP_UPLOAD_LIMIT');
+  const readFile = handler.indexOf('readAsArrayBuffer');
+  assert.ok(preCheck !== -1 && readFile !== -1 && preCheck < readFile,
+    '大小预检必须在读取文件之前（否则用户白等）');
+});

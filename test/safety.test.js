@@ -117,3 +117,33 @@ test('守护：格式化确认词不能被简化成"点两下就过"', () => {
   // 不传确认词时应该返回预览而不是执行
   assert.ok(/needConfirm: true/.test(host), '未确认时应返回 needConfirm 而不是执行');
 });
+
+test('守护：压缩包必须走二进制通道，不能退回 base64', () => {
+  // 踩过的坑：整包识别最初用 JSON + base64 上传，65MB 的压缩包会变成 87MB，
+  // 撞上请求体上限后被拒，而超限时连接被掐断 —— 界面一直转圈，用户不知道原因。
+  const html = fs.readFileSync(path.join(ROOT, 'desktop', 'renderer', 'index.html'), 'utf8');
+  const shell = fs.readFileSync(path.join(ROOT, 'src', 'shell-server.js'), 'utf8');
+  const host = fs.readFileSync(path.join(ROOT, 'src', 'host.js'), 'utf8');
+
+  // 界面读 zip 必须用 ArrayBuffer，不能是 readAsDataURL
+  const from = html.indexOf("$('#zipFile').onchange");
+  const zipHandler = html.slice(from, from + 3000);
+  assert.ok(/readAsArrayBuffer/.test(zipHandler), '读压缩包应使用 readAsArrayBuffer（二进制）');
+  assert.ok(!/readAsDataURL/.test(zipHandler), '读压缩包不该用 readAsDataURL（会膨胀 33%）');
+  assert.ok(/UPLOAD\(/.test(zipHandler), '应走二进制上传通道');
+  assert.ok(/capture:unzipBinary/.test(zipHandler), '应调用二进制解包动作');
+
+  // 外壳必须提供该通道，并有独立的（更大的）上限
+  assert.ok(/\/api\/upload/.test(shell), '外壳应提供 /api/upload 通道');
+  assert.ok(/uploadLimit/.test(shell), '应有独立的上传上限');
+  assert.ok(/BODY_TOO_LARGE/.test(shell), '超限要有专门的错误码，便于界面区分提示');
+
+  // 超限时不能直接 destroy —— 否则浏览器只看到"连接被重置"
+  const readBodyStart = shell.indexOf('function readBody');
+  const readBodyFn = shell.slice(readBodyStart, readBodyStart + 1400);
+  assert.ok(!/req\.destroy\(\)/.test(readBodyFn), '超限时不该 destroy 连接（要让 4xx 响应能送达）');
+
+  // 宿主两条路径共用同一套处理，避免行为分叉
+  assert.ok(/function processZipBuffer/.test(host), '解包处理应抽成共用函数');
+  assert.ok(/capture:unzipBinary/.test(host), '宿主应支持二进制解包');
+});
