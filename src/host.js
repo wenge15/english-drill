@@ -349,6 +349,34 @@ function createHost(opts) {
       return { ok: true, itemId, mime, size: bytes.length };
     },
 
+    /**
+     * 取出暂存图片，供界面在页内查看（核对题目时对照原图）。
+     *
+     * variant='recognized'（默认）：识别时实际送去的那一版（可能已压缩）。
+     * variant='original'：未压缩的原图（想看清晰细节时用）。
+     */
+    'capture:zipImage': ({ itemId, variant = 'recognized' }) => {
+      const it = batchStore.get(String(itemId || ''));
+      if (!it) return { ok: false, error: '这张图已不在暂存中（可能已重新选择压缩包），请重新解包' };
+      let bytes = it.bytes;
+      let mime = it.mime;
+      if (variant === 'original' && it.originalBytes) {
+        bytes = it.originalBytes;
+        mime = it.originalMime || it.mime;
+      }
+      return {
+        ok: true,
+        itemId,
+        name: it.name,
+        mime,
+        size: bytes.length,
+        hasOriginal: Boolean(it.originalBytes),
+        // 标明这一版是不是压缩过的，界面上要如实告诉用户在看哪一版
+        compressed: variant === 'recognized' && Boolean(it.originalBytes),
+        imageBase64: bytes.toString('base64'),
+      };
+    },
+
     /** 释放暂存（界面用完或用户取消时调用，避免占内存）。 */
     'capture:zipClear': () => {
       const n = batchStore.size;

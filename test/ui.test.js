@@ -351,3 +351,34 @@ test('核对页：有问题的题排前面，并标注来自哪张图', () => {
   assert.ok(/data-i="\$\{i\}"/.test(rq), '题卡的 data-i 必须是真实下标（否则编辑/删除会串题）');
   assert.ok(/data-del="\$\{i\}"/.test(rq), '删除按钮也必须用真实下标');
 });
+
+test('整包识别：点文件名能看图片，方便核对题目', () => {
+  // 需求：点击文件名字可以打开图片，方便核对题目
+  assert.ok(/class="zipsrc"/.test(html), '文件名应做成可点的链接');
+  assert.ok(/capture:zipImage/.test(html), '应有取图接口');
+  assert.ok(/function openViewerAt/.test(html), '应有查看器');
+  assert.ok(/box\.id = 'imgViewer'/.test(html), '应动态创建查看器容器');
+  assert.ok(/function closeViewer/.test(html), '应能关闭');
+
+  // 一批几十张，必须能连续翻页，不能一张张点开
+  assert.ok(/function viewerStep/.test(html), '应支持左右翻页');
+  assert.ok(/ivPrev/.test(html) && /ivNext/.test(html), '应有上一张/下一张按钮');
+  assert.ok(/ArrowLeft/.test(html) && /ArrowRight/.test(html), '应支持键盘翻页');
+  assert.ok(/Escape/.test(html), '应支持 Esc 关闭');
+
+  // 默认看"识别时实际送去的那一版"（用户核对的正是模型看到了什么）
+  assert.ok(/variant = 'recognized'/.test(html), '默认应看识别用的版本');
+  assert.ok(/got\.meta\.compressed/.test(html), '应如实标明这是压缩后的版本');
+  assert.ok(/看原图/.test(html), '应能切到未压缩原图');
+
+  // 没识别过的图也要能看（解包后就想预览是常见需求）
+  const ovFrom = html.indexOf('async function openViewerAt');
+  const ov = html.slice(ovFrom, html.indexOf('function shortSource', ovFrom));
+  assert.ok(/it\.status === 'pending'/.test(ov), '未识别的图也要能查看');
+  assert.ok(/还没识别/.test(ov), '应说明这张还没识别');
+
+  // 翻页要包起来（到末尾回到开头），不能卡在最后一张
+  const vsFrom = html.indexOf('function viewerStep');
+  const vs = html.slice(vsFrom, html.indexOf('async function openViewerAt', vsFrom));
+  assert.ok(/% items\.length/.test(vs), '翻页应循环');
+});

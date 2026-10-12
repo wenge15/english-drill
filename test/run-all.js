@@ -66,7 +66,7 @@ const EXPECTED = {
   'srs.test.js': 15,
   'teach-chat.test.js': 22,
   'textparse.test.js': 18,
-  'ui.test.js': 27,
+  'ui.test.js': 28,
   'zip.test.js': 16,
 };
 
