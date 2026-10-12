@@ -30,8 +30,12 @@ const TEST_ROOT = path.join(__dirname, '..', 'data', 'test');
 fs.mkdirSync(TEST_ROOT, { recursive: true });
 const DATA_DIR = fs.mkdtempSync(path.join(TEST_ROOT, 'http-'));
 
-const PORT = Number(process.env.HTTP_TEST_PORT || 8931);
-const BASE = `http://127.0.0.1:${PORT}`;
+// 端口：优先用约定的 8931，被占用就让系统分配。
+// 踩过的坑：写死端口时若被占用（同时跑两份测试就会），listen 抛错让整个测试
+// 提前结束，表现为"通过数莫名变少"。这里先试约定端口，失败退回 0（系统分配）。
+const PREFERRED_PORT = Number(process.env.HTTP_TEST_PORT || 8931);
+let PORT = PREFERRED_PORT;
+let BASE = `http://127.0.0.1:${PORT}`;
 
 let failures = 0;
 const check = (name, cond, extra = '') => {
@@ -104,9 +108,10 @@ function makeTestZip(files) {
 }
 
 /** 起一个独立外壳，界面从磁盘读（与开发时一致）。 */
-async function startShell() {  const rendererDir = path.join(__dirname, '..', 'desktop', 'renderer');
-  const shell = createShell({
-    port: PORT,
+async function startShell() {
+  const rendererDir = path.join(__dirname, '..', 'desktop', 'renderer');
+  const make = (port) => createShell({
+    port,
     host: '127.0.0.1',
     dataDir: DATA_DIR,
     shellName: 'node-http',
@@ -120,7 +125,21 @@ async function startShell() {  const rendererDir = path.join(__dirname, '..', 'd
       }
     },
   });
-  await listen(shell, PORT, '127.0.0.1');
+
+  let shell = make(PORT);
+  try {
+    await listen(shell, PORT, '127.0.0.1');
+  } catch {
+    // 约定端口被占用（同时跑两份测试就会）：退回让系统分配。
+    // createShell 是按传入的 port 算 url 的，所以拿到真实端口后要同步回填。
+    console.log(`  （端口 ${PORT} 被占用，改用系统分配的端口）`);
+    try { shell.server.close(); } catch { /* 没起来就无需关闭 */ }
+    shell = make(0);
+    await listen(shell, 0, '127.0.0.1');
+    PORT = shell.server.address().port;
+    BASE = `http://127.0.0.1:${PORT}`;
+    shell.url = `${BASE}/?token=${shell.token}`;
+  }
   return shell;
 }
 
@@ -271,16 +290,20 @@ async function main() {
   // 用**另一个小上限的实例**来测，而不是往主实例灌 200MB：
   // 分配 200MB 会给整个测试进程带来内存压力（实测出现过偶发失败）。
   // 换个上限走的是同一条判断逻辑，验证效果一样，开销小得多。
-  const tinyPort = PORT + 1;
+  //
+  // 端口用 0 让系统分配：踩过的坑 —— 写死 PORT+1 时，若该端口正被占用
+  // （例如同时跑了两份测试），listen 会抛错并让整个测试提前结束，
+  // 表现为"通过数莫名变少"（实测出现过 352 → 348 的漂移）。
   const tinyShell = createShell({
-    port: tinyPort,
+    port: 0,
     host: '127.0.0.1',
     dataDir: DATA_DIR,
     shellName: 'test-tiny-limit',
     uploadLimit: 1 * 1024 * 1024, // 1MB，方便用小数据触发超限
     readAsset: () => null,
   });
-  await listen(tinyShell, tinyPort, '127.0.0.1');
+  await listen(tinyShell, 0, '127.0.0.1');
+  const tinyPort = tinyShell.server.address().port;
   const tooBig = await fetch(`http://127.0.0.1:${tinyPort}/api/upload?channel=capture:unzipBinary`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream', 'x-dsh-token': token },
@@ -452,16 +475,61 @@ A. completes  B. completed  C. was completed  D. has completed
   console.log('\n[HTTP 外壳] 考前集训');
   const sstatus = await invoke('sprint:status');
   check('集训进度接口可用', sstatus.ok === true && typeof sstatus.totalWrong === 'number', JSON.stringify(sstatus).slice(0, 160));
+
+  // ⚠ 这里必须**自己造出错题**，不能依赖前面测试残留的状态。
+  //
+  // 踩过的坑：原来自顾自地调 sprint:plan，靠"库里恰好有错题"才进入断言分支；
+  // 而前面的批量删除测试会清掉题目，于是这里 sPlan.empty 为真、
+  // 4 条断言被静默跳过 —— 表现为"通过数莫名变少"（实测 92 → 88），
+  // 而且退出码还是 0，看起来完全正常。这是最难查的那种测试 bug：
+  // 少测了东西却不报错。所以现在自己准备数据，并且**不允许跳过**。
+  const sprintQ1 = await invoke('import:parseText', {
+    text: [
+      '1. Sprint alpha ____ here.',
+      'A. a  B. b  C. c  D. d',
+      '答案：B',
+      '2. Sprint beta ____ here.',
+      'A. a  B. b  C. c  D. d',
+      '答案：A',
+    ].join('\n'),
+  });
+  const sprintSaved = await invoke('import:commit', {
+    questions: sprintQ1.questions,
+    onDuplicate: 'new',
+  });
+  const sprintCreated = (sprintSaved.results || []).filter((r) => r.ok && r.action === 'created').length;
+  check('集训前置：造出错题', sprintCreated >= 2,
+    `入库 ${sprintCreated} 条：${JSON.stringify(sprintSaved).slice(0, 160)}`);
+
+  const sStart = await invoke('practice:start', { force: true });
+  if (sStart.ok && !sStart.empty && sStart.session) {
+    // 故意全部答错，制造错题
+    for (const item of sStart.session.items) {
+      const wrong = Object.keys(item.options || {}).find((L) => L !== item.answer) || 'A';
+      await invoke('practice:answer', {
+        sessionId: sStart.session.id,
+        questionId: item.questionId,
+        picked: wrong,
+      });
+    }
+    await invoke('practice:finish', { sessionId: sStart.session.id });
+  }
+
   const sPlan = await invoke('sprint:plan', { days: 7 });
   check('能生成集训计划', sPlan.ok === true, JSON.stringify(sPlan).slice(0, 160));
-  if (sPlan.ok && !sPlan.empty) {
+  // 关键：这里不再"没有错题就跳过"。有错题是我们自己造的，所以必须成立。
+  check('集训计划非空（前置错题已生效）', sPlan.ok === true && sPlan.empty !== true,
+    `totalWrong=${sPlan.totalWrong} empty=${sPlan.empty}`);
+  if (sPlan.ok && sPlan.empty !== true) {
     check('计划天数不超过 7 天', sPlan.plan.length <= 7, `实际 ${sPlan.plan.length} 天`);
     check('错题全部被覆盖', sPlan.covered === sPlan.totalWrong, `覆盖 ${sPlan.covered} / 错题 ${sPlan.totalWrong}`);
     const quick = await invoke('sprint:quickStart', { days: 7 });
     check('能一键开始集训', quick.ok === true && !quick.empty, JSON.stringify(quick).slice(0, 200));
     check('集训后有排期记录', Boolean(quick.status?.lastSprint), JSON.stringify(quick.status).slice(0, 200));
   } else {
-    console.log('  （当前没有错题，跳过集训应用断言）');
+    // 走到这里说明前置数据没生效，必须显式失败，不能静默少测
+    failures += 1;
+    console.error('  FAIL  集训断言因前置错题缺失而被跳过（这不该发生）');
   }
 
   console.log('\n[HTTP 外壳] 第二次错就带讲评材料');

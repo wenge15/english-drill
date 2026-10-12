@@ -325,3 +325,29 @@ test('整包识别：超限当场说清楚，而不是白等一次上传', () =>
   assert.ok(preCheck !== -1 && readFile !== -1 && preCheck < readFile,
     '大小预检必须在读取文件之前（否则用户白等）');
 });
+
+test('核对页：有问题的题排前面，并标注来自哪张图', () => {
+  // 需求：识别有问题的题目要放在前面，并告诉我源自哪个文件，方便核对修改
+  assert.ok(/function problemScore/.test(html), '应有问题严重度分级');
+  assert.ok(/function reviewOrder/.test(html), '应有显示顺序计算');
+  assert.ok(/function shortSource/.test(html), '应有来源文件名缩短');
+  assert.ok(/来自：/.test(html), '题卡上应标出来自哪张图');
+  assert.ok(/data-f="sourceNote"/.test(html), '出处应可编辑（便于写成更好记的说法）');
+
+  // 排序不能改动 pending 本身，否则编辑/删除会错位
+  const ro = html.slice(html.indexOf('function reviewOrder'), html.indexOf('function reviewOrder') + 500);
+  assert.ok(/\.map\(\(q, i\) => \(\{ q, i, score/.test(ro), '排序视图要带上真实下标');
+  assert.ok(/a\.i - b\.i/.test(ro), '同严重度内必须保持原始先后（稳定排序）');
+
+  // 无法入库的问题必须最优先（缺题干/选项不足/缺答案）
+  const ps = html.slice(html.indexOf('function problemScore'), html.indexOf('function problemScore') + 700);
+  assert.ok(/return 3/.test(ps), '无法入库的问题应为最高优先级');
+  assert.ok(/incomplete/.test(ps), '不完整题应被识别');
+  assert.ok(/conflict/.test(ps), '答案存疑应被识别');
+
+  // 排序只影响显示顺序，题卡上的 data-i 必须指向真实下标
+  const rqFrom = html.indexOf('function renderQList');
+  const rq = html.slice(rqFrom, rqFrom + 3000);
+  assert.ok(/data-i="\$\{i\}"/.test(rq), '题卡的 data-i 必须是真实下标（否则编辑/删除会串题）');
+  assert.ok(/data-del="\$\{i\}"/.test(rq), '删除按钮也必须用真实下标');
+});

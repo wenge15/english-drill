@@ -1616,12 +1616,53 @@ Answers: 21-B  22-C  23-B`;
   }
 
   function renderQList() {
-    $('#qlist').innerHTML = pending.map((q, i) => `
-      <div class="qitem" data-i="${i}">
+    const view = reviewOrder();
+    const problemCount = view.filter((v) => v.score > 0).length;
+
+    // 有问题时先给一条说明，告诉用户"为什么顺序看起来是乱的"
+    const banner =
+      problemCount > 0
+        ? `<div class="warnbox" style="margin-bottom:10px">
+            已把 <b>${problemCount} 道需要处理的题排在前面</b>（其余按原顺序跟在后面）。
+            每题都标了它来自哪张图，方便你对照原图修改。<br>
+            <span class="muted">下面的「第 N 题」是它在本批里的<b>原始编号</b>，
+            所以排到前面时编号看起来会跳号 —— 这是故意的，方便你在原卷上找到对应那道题。</span>
+           </div>`
+        : '';
+
+    $('#qlist').innerHTML = banner + view
+      .map(({ q, i, score }) => {
+        // 题号用"原始顺序号"，即使被排到前面也还是原来那题的编号，
+        // 便于用户在原卷上找到对应的题
+        const badges = [];
+        if (!(q.stem || '').trim()) badges.push(['必须补题干', 'crit']);
+        if (Object.keys(q.options || {}).length < 2) badges.push(['选项不足', 'crit']);
+        if (!q.answer) badges.push(['缺答案', 'crit']);
+        if (q.incomplete) {
+          badges.push([`不完整${q.incompleteReason ? `：${q.incompleteReason}` : ''}`, 'crit']);
+        }
+        if (q.issues && q.issues.length) badges.push([q.issues[0], 'crit']);
+        if (q.confidence !== null && q.confidence !== undefined && q.confidence < 0.7) {
+          badges.push([`信心 ${(q.confidence * 100).toFixed(0)}%`, 'muted']);
+        }
+        const badgeHtml = badges.length
+          ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:6px">${badges
+              .map(([t, k]) => `<span class="${k === 'crit' ? 'crit' : 'muted'}" style="font-size:12px;border:1px solid currentColor;border-radius:4px;padding:1px 6px">${esc(t)}</span>`)
+              .join('')}</div>`
+          : '';
+
+        const src = shortSource(q.sourceImage);
+        const srcHtml = src
+          ? `<div class="muted" style="font-size:12px;margin-bottom:6px" title="${esc(q.sourceImage)}">来自：<b>${esc(src)}</b></div>`
+          : '';
+
+        return `
+      <div class="qitem" data-i="${i}" style="${score > 0 ? 'border-left:3px solid var(--crit)' : ''}">
         <div class="row" style="justify-content:space-between;margin-bottom:8px">
           <span class="row" style="gap:8px">
             <input type="checkbox" class="qpick" data-i="${i}" style="width:auto" title="勾选后可批量删除" />
             <b>第 ${i + 1} 题${q.number ? `（原题号 ${q.number}）` : ''}</b>
+            ${score > 0 ? '<span class="crit" style="font-size:12px">需处理</span>' : ''}
             ${verifyMap[i] && verifyMap[i].status === 'conflict' ? '<span class="crit" style="font-size:12px">答案待确认</span>' : ''}
           </span>
           <span class="row" style="gap:6px">
@@ -1629,8 +1670,9 @@ Answers: 21-B  22-C  23-B`;
             <button class="btn danger" data-del="${i}" style="padding:3px 9px;font-size:12px">删除这道</button>
           </span>
         </div>
+        ${srcHtml}
+        ${badgeHtml}
         ${verifyBadge(i)}
-        ${q.issues && q.issues.length ? `<div class="warnbox" style="margin-bottom:8px">${q.issues.map(esc).join('<br>')}</div>` : ''}
         <label class="fld"><span>题干</span><textarea data-f="stem">${esc(q.stem)}</textarea></label>
         <div class="grid2">
           ${['A', 'B', 'C', 'D'].map((L) => `
@@ -1653,7 +1695,11 @@ Answers: 21-B  22-C  23-B`;
         <label class="fld" style="margin-bottom:0"><span>解析</span><textarea data-f="explanation" style="min-height:46px">${esc(q.explanation || '')}</textarea></label>
         <label class="fld" style="margin:8px 0 0"><span>分组（可单题调整）</span>
           <input type="text" data-f="group" list="groupOptions" value="${esc(q.groupName || '')}" placeholder="不填则不分组" /></label>
-      </div>`).join('');
+        <label class="fld" style="margin:8px 0 0"><span>出处（可改，方便以后回查）</span>
+          <input type="text" data-f="sourceNote" value="${esc(q.sourceNote || '')}" placeholder="例如 第一单元 试卷3 第7题" /></label>
+      </div>`;
+      })
+      .join('');
 
     $('#qlist').querySelectorAll('[data-del]').forEach((b) => {
       b.onclick = () => {
@@ -1673,6 +1719,72 @@ Answers: 21-B  22-C  23-B`;
     if (window.__updatePick) window.__updatePick();
   }
 
+  /**
+   * 一道题的"问题严重度"，越大越该先看。0 表示没问题。
+   *
+   * 为什么要排序：整包识别几十张图后，有问题的题散落在几百道题里，
+   * 用户翻找起来很痛苦。把需要处理的排到最前面，核对才有效率。
+   */
+  function problemScore(q, i) {
+    let s = 0;
+    const okStem = Boolean((q.stem || '').trim());
+    const optCount = Object.keys(q.options || {}).length;
+    // 缺题干/选项不足/没答案 —— 不补全就无法入库，最优先
+    if (!okStem || optCount < 2 || !q.answer) return 3;
+    if (q.incomplete) s = Math.max(s, 2);          // 模型标记为残缺
+    if (verifyMap[i] && verifyMap[i].status === 'conflict') s = Math.max(s, 2); // 答案存疑
+    if (q.issues && q.issues.length) {
+      // 只有"看不清"之类的提示算轻微问题；其它提示说明确实要人看
+      const soft = q.issues.every((x) => /看不清/.test(x));
+      s = Math.max(s, soft ? 1 : 2);
+    }
+    if (q.confidence !== null && q.confidence !== undefined && q.confidence < 0.7) {
+      s = Math.max(s, 1);
+    }
+    return s;
+  }
+
+  /**
+   * 计算核对页的显示顺序：有问题的排前面，同严重度内保持原始顺序。
+   *
+   * 排序只影响"看"的顺序，不改 pending 本身 ——
+   * 所以每题都带一个 index 指回它在 pending 里的真实位置，
+   * 勾选删除、写回编辑、答案核对标记都用它，不会因为排序而错位。
+   */
+  function reviewOrder() {
+    return pending
+      .map((q, i) => ({ q, i, score: problemScore(q, i) }))
+      .sort((a, b) => (b.score - a.score) || (a.i - b.i));
+  }
+
+  /** 把来源文件名缩短，便于在题卡上显示。 */
+  function shortSource(name) {
+    const s = String(name || '');
+    if (!s) return '';
+    const base = s.split(/[\\/]/).pop() || s;
+    return base.length > 34 ? `${base.slice(0, 16)}…${base.slice(-14)}` : base;
+  }
+
+  /**
+   * 测试钩子：把核对页的排序逻辑与渲染暴露出来，供自动化测试直接调用。
+   *
+   * 为什么需要：排序是"要算"的逻辑，只断言源码里有没有某些字符串
+   * 无法证明它算得对。有了这个钩子，测试可以在真实浏览器里验证
+   * "有问题的题确实排到了前面、且下标不会错位"。
+   * 这些都是只读/等价于用户操作的入口，不改变产品行为。
+   */
+  window.__reviewTest = {
+    problemScore,
+    reviewOrder: () => reviewOrder().map((o) => ({ i: o.i, score: o.score })),
+    shortSource,
+    // 供测试驱动真实渲染（与用户从整包识别得到结果时走的是同一条路）
+    setPending: (list) => {
+      pending = list;
+      pendingSource = 'image';
+    },
+    render: () => renderReview([]),
+  };
+
   /** 把界面上的编辑结果写回 pending（入库前必调，否则用户的修改会丢）。 */
   function collect() {
     const boxes = $('#qlist')?.querySelectorAll('.qitem') || [];
@@ -1690,6 +1802,9 @@ Answers: 21-B  22-C  23-B`;
       q.knowledgePoints = box.querySelector('[data-f=kp]').value.split(/[,，、;；]/).map((s) => s.trim()).filter(Boolean);
       q.difficulty = box.querySelector('[data-f=difficulty]').value;
       q.explanation = box.querySelector('[data-f=explanation]').value.trim();
+      // 出处可编辑：用户核对完可以改成更好记的说法（如"第一单元 试卷3 第7题"）
+      const src = box.querySelector('[data-f=sourceNote]');
+      if (src) q.sourceNote = src.value.trim();
     });
   }
 };
