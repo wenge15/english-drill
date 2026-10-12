@@ -117,6 +117,13 @@ function normalizeQuestion(raw, index = 0) {
 
   const confidence = Number.isFinite(Number(raw?.confidence)) ? Number(raw.confidence) : null;
 
+  // 模型自报的"这题不完整"（文字被裁掉、选项缺失、跨页断开等）。
+  // 用户报告的 bug 里有一道"不完整的题"被当成正常题录进来，所以这里要单独标出来，
+  // 让界面能提醒"这道题可能不完整，建议重拍/重新识别"。
+  const incomplete = Boolean(raw?.incomplete ?? raw?.不完整 ?? false);
+  const incompleteReason = String(raw?.incompleteReason ?? raw?.不完整原因 ?? '').trim();
+  if (incomplete) issues.push(`模型标记为不完整${incompleteReason ? `：${incompleteReason}` : ''}`);
+
   return {
     tempId: `t${index}_${Math.random().toString(36).slice(2, 8)}`,
     stem,
@@ -128,6 +135,8 @@ function normalizeQuestion(raw, index = 0) {
     sourceNote: String(raw?.sourceNote ?? raw?.出处 ?? '').trim(),
     answerInSource: Boolean(raw?.answerInSource ?? raw?.答案在图上),
     confidence,
+    incomplete,
+    incompleteReason,
     issues,
   };
 }
@@ -146,9 +155,15 @@ function parseExtraction(rawText) {
   else if (Array.isArray(json)) list = json;
   else if (json && (json.stem || json.question || json.题干)) list = [json];
 
+  // 模型自报"这张图里一共几道题"。有了它才能发现"多录/漏录" —— 见下面的核对。
+  const claimedRaw = json && !Array.isArray(json)
+    ? (json.totalInImage ?? json.total ?? json.题目总数 ?? json.count)
+    : undefined;
+  const claimed = Number.isFinite(Number(claimedRaw)) ? Number(claimedRaw) : null;
+
   if (list.length === 0) {
     warnings.push('模型输出里没有找到题目结构，请检查图片是否清晰，或改用手动录入。');
-    return { questions: [], warnings, raw: rawText };
+    return { questions: [], warnings, raw: rawText, claimedTotal: claimed, countMismatch: false };
   }
 
   const questions = list.map((q, i) => normalizeQuestion(q, i));
@@ -159,7 +174,41 @@ function parseExtraction(rawText) {
   const lowConfidence = questions.filter((q) => q.confidence !== null && q.confidence < 0.7);
   if (lowConfidence.length) warnings.push(`${lowConfidence.length} 道题模型自评置信度偏低，建议重点核对。`);
 
-  return { questions, warnings, raw: rawText };
+  /**
+   * 数量核对：模型说图里有 N 道，却抄出了 M 条。
+   *
+   * 这是用户报告的 bug 的直接防线：他那边"本来只有 13 题，最终识别出 15 题"，
+   * 而且其中一道还不完整。光靠"让模型自己数"不够，必须把两个数字摆在一起比，
+   * 不相符就**明确告诉用户**，而不是默默入库。
+   */
+  let countMismatch = false;
+  if (claimed !== null && claimed !== questions.length) {
+    countMismatch = true;
+    const diff = questions.length - claimed;
+    warnings.push(
+      `⚠ 数量对不上：模型说图里有 ${claimed} 道题，但实际抄出 ${questions.length} 条` +
+        `（${diff > 0 ? `多了 ${diff} 条` : `少了 ${-diff} 条`}）。` +
+        '请对照原图逐条核对，必要时重新识别这张图。',
+    );
+  }
+
+  const incompleteList = questions.filter((q) => q.incomplete);
+  if (incompleteList.length) {
+    warnings.push(
+      `⚠ 有 ${incompleteList.length} 道题被模型标记为「不完整」（文字被裁掉/选项缺失），` +
+        '建议重拍或对这张图重新识别，不要直接入库。',
+    );
+  }
+
+  return {
+    questions,
+    warnings,
+    raw: rawText,
+    claimedTotal: claimed,
+    actualTotal: questions.length,
+    countMismatch,
+    incompleteCount: incompleteList.length,
+  };
 }
 
 /** 生成读图提示词。answerInSource 用于"答案就印在卷面上"的情况。 */
@@ -183,9 +232,25 @@ function buildVisionPrompt(opts = {}) {
     '7. explanation 用中文写一句解析，说明为什么选这个答案。',
     '8. confidence 填 0~1，表示你对本次识别的把握。',
     '',
+    '⚠ 最重要的一条 —— 先数，再抄，最后自查：',
+    'A) 先数一遍：这张图里一共有几道**编号的题**？把这个数字填进 totalInImage。',
+    '   注意：页码、页眉页脚、标题、题干里的序号（如 "①②"）都不算题。',
+    'B) 再逐题抄写。questions 数组的长度必须等于 totalInImage。',
+    'C) 最后自查：如果你抄出的条数 ≠ 你数出的数字，说明漏抄或多抄了，',
+    '   请重新看一遍图，把它改对再输出。宁可标成 incomplete，也不要靠编造凑数。',
+    '',
+    '关于"不完整"：',
+    '- 如果某题文字被裁掉、被遮挡、跨页断开，或选项缺失，就把该题的 incomplete 设为 true，',
+    '  并在 incompleteReason 里用一句话说明（例如「选项 C、D 被裁掉」「题干末尾被截断」）。',
+    '- 如果某段文字看起来是**上一题的续行**（没有自己的题号），',
+    '  请把它合并进上一题的题干或选项，**不要**新建一道题。',
+    '- 如果整张图只有零星碎片、凑不出完整题目，就返回空数组并把 totalInImage 设为 0，',
+    '  不要输出半道题。',
+    '',
     '输出格式：',
     JSON.stringify(
       {
+        totalInImage: 2,
         questions: [
           {
             stem: 'He ____ to school every day.',
@@ -196,6 +261,19 @@ function buildVisionPrompt(opts = {}) {
             difficulty: 'easy',
             answerInSource: true,
             confidence: 0.95,
+            incomplete: false,
+          },
+          {
+            stem: 'The report ____ by the team last week. (选项被裁掉一部分)',
+            options: { A: 'completes', B: 'completed', C: 'was completed' },
+            answer: 'C',
+            explanation: '被动语态。',
+            knowledgePoints: ['被动语态'],
+            difficulty: 'medium',
+            answerInSource: true,
+            confidence: 0.6,
+            incomplete: true,
+            incompleteReason: '选项 D 被裁掉',
           },
         ],
       },

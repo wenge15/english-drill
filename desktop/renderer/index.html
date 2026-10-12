@@ -1019,6 +1019,14 @@ Answers: 21-B  22-C  23-B`;
     const pct = Math.round((done / items.length) * 100);
 
     const failedList = items.filter((i) => i.status === 'failed');
+    /**
+     * "可疑"的图：数量对不上，或出现不完整的题。
+     * 这正是用户报告的 bug —— 13 题的卷子录成 15 题、还夹一道残缺的。
+     * 把这些挑出来单独给一个"用原图重识别"的出口。
+     */
+    const suspect = items.filter(
+      (i) => i.status === 'done' && (i.countMismatch || i.incompleteCount > 0),
+    );
 
     out.innerHTML = `
       <div class="row" style="justify-content:space-between;margin-bottom:6px">
@@ -1034,12 +1042,28 @@ Answers: 21-B  22-C  23-B`;
             .map((it) => {
               const mark =
                 it.status === 'done'
-                  ? `<span class="okc">✓ ${it.questions} 题</span>`
+                  ? (it.countMismatch || it.incompleteCount
+                      ? `<span class="crit">⚠ ${it.questions} 题</span>`
+                      : `<span class="okc">✓ ${it.questions} 题</span>`)
                   : it.status === 'running'
                     ? `<span class="spin"></span> ${it.stage === 'compressing' ? '压缩中' : it.stage === 'recognizing' ? '识别中' : '处理中'}`
                     : it.status === 'failed'
                       ? `<span class="crit">✗ ${esc(it.error || '失败')}</span>`
                       : '<span class="muted">待识别</span>';
+              // 数量核对：把"模型说几道 / 实际抄出几条"直接摆出来，
+              // 这样"本应 13 题却录成 15 题"这类问题当场就能看见
+              let problem = '';
+              if (it.status === 'done') {
+                if (it.countMismatch) {
+                  problem = `<span class="crit">数量不符：说 ${it.claimedTotal} 道，抄出 ${it.actualTotal} 条</span>`;
+                }
+                if (it.incompleteCount) {
+                  problem += `${problem ? '<br>' : ''}<span class="crit">${it.incompleteCount} 道不完整</span>`;
+                }
+                if (!problem && it.warnings && it.warnings.length) {
+                  problem = `<span class="muted">${esc(String(it.warnings[0]).slice(0, 40))}</span>`;
+                }
+              }
               // 体积信息：让用户看到压缩到底省了多少
               const sizeInfo =
                 it.originalBytes && it.bytes && it.bytes < it.originalBytes
@@ -1049,9 +1073,10 @@ Answers: 21-B  22-C  23-B`;
                     : '';
               return `<tr>
                 <td style="color:var(--muted);white-space:nowrap">#${it.index}</td>
-                <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(it.name)}">${esc(it.name)}</td>
+                <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(it.name)}">${esc(it.name)}</td>
                 <td style="white-space:nowrap">${sizeInfo}</td>
                 <td style="white-space:nowrap">${mark}</td>
+                <td style="font-size:12px">${problem}</td>
               </tr>`;
             })
             .join('')}</tbody>
@@ -1061,6 +1086,21 @@ Answers: 21-B  22-C  23-B`;
         items.some((i) => i.savedBytes)
           ? `<div class="muted" style="margin-top:8px;font-size:12px">
               压缩共省下 ${fmtBytes(items.reduce((a, b) => a + (b.savedBytes || 0), 0))}（识别准确率基本不受影响）
+            </div>`
+          : ''
+      }
+      ${
+        suspect.length
+          ? `<div class="warnbox" style="margin-top:10px">
+              <b>有 ${suspect.length} 张图的识别结果可疑</b>
+              <div class="muted" style="margin-top:6px;font-size:12.5px">
+                数量对不上或出现不完整题，通常有两种原因：<br>
+                ① 图片被压缩后笔画糊了 → 点下面的按钮「用原图重识别」（慢一些但更准）<br>
+                ② 卷面本身模糊或被裁掉 → 建议重拍那一页
+              </div>
+              <div class="row" style="margin-top:8px">
+                <button class="btn ghost" id="zipRedoRaw">用原图重识别这 ${suspect.length} 张</button>
+              </div>
             </div>`
           : ''
       }
@@ -1084,6 +1124,28 @@ Answers: 21-B  22-C  23-B`;
     if ($('#zipRetryFailed')) {
       $('#zipRetryFailed').onclick = () => {
         for (const it of zipBatch.items) if (it.status === 'failed') it.status = 'pending';
+        runZipQueue();
+      };
+    }
+
+    if ($('#zipRedoRaw')) {
+      $('#zipRedoRaw').onclick = async () => {
+        // 1) 让服务端把这几张换回未压缩的原图
+        const list = items.filter((i) => i.status === 'done' && (i.countMismatch || i.incompleteCount > 0));
+        for (const it of list) {
+          const r = await INVOKE('capture:zipRestoreOriginal', { itemId: it.itemId });
+          if (r.ok) {
+            it.noCompress = true; // 这一轮跳过压缩
+            it.status = 'pending';
+            it.savedBytes = 0;
+            it.countMismatch = false;
+            it.incompleteCount = 0;
+          } else {
+            // 没有原图（本来就没压过）时，至少要重跑一次识别
+            it.status = 'pending';
+          }
+        }
+        toast(`将用原图重新识别 ${list.length} 张`, 'okc');
         runZipQueue();
       };
     }
@@ -1116,21 +1178,31 @@ Answers: 21-B  22-C  23-B`;
 
         // 上传前瘦身：手机原图常有 3-5MB，读图模型内部也就用约 1024 token，
         // 缩到长边 1600 再转 JPEG 几乎不损识别率，却大幅减少传输与耗时。
+        // 用 it.noCompress 标记的图跳过（用户选了"用原图重试"）。
         it.stage = 'compressing';
         renderZipQueue();
         let imageBase64 = got.imageBase64;
         let mime = got.mime || it.mime;
-        if ($('#zipCompress').checked) {
+        if ($('#zipCompress').checked && !it.noCompress) {
           const c = await compressImageDataUrl(`data:${mime};base64,${got.imageBase64}`);
           if (c.compressed) {
             imageBase64 = c.dataUrl.split(',')[1] || imageBase64;
             mime = 'image/jpeg';
             it.savedBytes = (it.savedBytes || 0) + (c.originalBytes - c.bytes);
+            // 回存到服务端：这样"用原图重试"时服务端还留着未压缩的版本
+            try {
+              await INVOKE('capture:zipSaveCompressed', {
+                itemId: it.itemId,
+                imageBase64,
+                mime,
+              });
+            } catch (e) { /* 回存失败不影响本次识别 */ }
           }
           it.note = c.reason;
           it.originalBytes = c.originalBytes;
           it.bytes = c.bytes;
         }
+        it.noCompress = false;
 
         it.stage = 'recognizing';
         renderZipQueue();
@@ -1138,6 +1210,7 @@ Answers: 21-B  22-C  23-B`;
           imageBase64,
           mime,
           answerInSource: $('#hasAnswer').checked,
+          sourceName: it.name,
         });
         if (!r.ok) {
           // 跳过继续：记下原因，后面可以单独重试
@@ -1148,6 +1221,11 @@ Answers: 21-B  22-C  23-B`;
           it.questions = (r.questions || []).length;
           it.data = r.questions || [];
           it.warnings = r.warnings || [];
+          // 数量核对结果：模型说图里有几道 vs 实际抄出几条
+          it.claimedTotal = r.claimedTotal;
+          it.actualTotal = r.actualTotal;
+          it.countMismatch = Boolean(r.countMismatch);
+          it.incompleteCount = r.incompleteCount || 0;
         }
       } catch (e) {
         it.status = 'failed';

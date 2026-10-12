@@ -227,3 +227,77 @@ test('答案比对：识别的答案不可用时，提示参考独立作答但�
   assert.ok(r.message.includes('B'), '应告诉用户独立作答得出什么');
   assert.ok(/确认/.test(r.suggestion), '应提醒自己确认');
 });
+
+/* ---------------- 数量核对与不完整题（用户报告的 bug 回归） ---------------- */
+
+const mkQ = (n) => ({
+  stem: `第 ${n} 题 ____ here.`,
+  options: { A: 'a', B: 'b', C: 'c', D: 'd' },
+  answer: 'B',
+});
+
+test('回归：模型说图里有 13 道、却抄出 15 条 → 必须报警而不是默默入库', () => {
+  // 用户报告：本来只有 13 题，最终识别出 15 题（还有一道不完整）
+  const list = [];
+  for (let i = 1; i <= 15; i += 1) list.push(mkQ(i));
+  const r = ex.parseExtraction(JSON.stringify({ totalInImage: 13, questions: list }));
+
+  assert.strictEqual(r.claimedTotal, 13, '应读到模型自报的题数');
+  assert.strictEqual(r.actualTotal, 15, '应统计实际抄出的条数');
+  assert.strictEqual(r.countMismatch, true, '数量不符必须标记出来');
+  const w = r.warnings.join(' ');
+  assert.ok(/数量对不上/.test(w), '警告里要说明数量对不上');
+  assert.ok(/13/.test(w) && /15/.test(w), '警告里要同时给出两个数字');
+  assert.ok(/多了 2 条/.test(w), '要说明多/少了几条');
+});
+
+test('回归：数量相符时不报警（避免狼来了）', () => {
+  const r = ex.parseExtraction(JSON.stringify({ totalInImage: 3, questions: [mkQ(1), mkQ(2), mkQ(3)] }));
+  assert.strictEqual(r.countMismatch, false);
+  assert.ok(!/数量对不上/.test(r.warnings.join(' ')));
+});
+
+test('模型没自报题数时不误报（老提示词/老模型兼容）', () => {
+  const r = ex.parseExtraction(JSON.stringify({ questions: [mkQ(1), mkQ(2)] }));
+  assert.strictEqual(r.claimedTotal, null);
+  assert.strictEqual(r.countMismatch, false, '没有可比对象就不该报警');
+  assert.strictEqual(r.actualTotal, 2);
+});
+
+test('回归：不完整的题要被标记，并提醒不要直接入库', () => {
+  const r = ex.parseExtraction(
+    JSON.stringify({
+      totalInImage: 2,
+      questions: [
+        { ...mkQ(1), incomplete: true, incompleteReason: '选项 D 被裁掉' },
+        mkQ(2),
+      ],
+    }),
+  );
+  assert.strictEqual(r.incompleteCount, 1, '应统计不完整题数');
+  assert.strictEqual(r.questions[0].incomplete, true);
+  assert.strictEqual(r.questions[0].incompleteReason, '选项 D 被裁掉');
+  const w = r.warnings.join(' ');
+  assert.ok(/不完整/.test(w), '应提示存在不完整题');
+  assert.ok(/重新识别|重拍/.test(w), '应给出可操作的建议');
+  // 不完整的题也要出现在"需要人工确认"的清单里
+  assert.ok(/选项 D 被裁掉/.test(w), '原因要透传到警告里');
+});
+
+test('中文键名的不完整标记也能识别（模型偶尔用中文键）', () => {
+  const r = ex.parseExtraction(
+    JSON.stringify({ 题目总数: 1, questions: [{ ...mkQ(1), 不完整: true, 不完整原因: '下半页缺失' }] }),
+  );
+  assert.strictEqual(r.claimedTotal, 1);
+  assert.strictEqual(r.incompleteCount, 1);
+  assert.strictEqual(r.questions[0].incompleteReason, '下半页缺失');
+});
+
+test('数量正确但有不完整题时，两种问题要分别报出来', () => {
+  const r = ex.parseExtraction(
+    JSON.stringify({ totalInImage: 2, questions: [{ ...mkQ(1), incomplete: true }, mkQ(2)] }),
+  );
+  assert.strictEqual(r.countMismatch, false, '数量是对的');
+  assert.strictEqual(r.incompleteCount, 1, '但有不完整题');
+  assert.ok(/不完整/.test(r.warnings.join(' ')));
+});

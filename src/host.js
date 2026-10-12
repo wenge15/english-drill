@@ -283,16 +283,70 @@ function createHost(opts) {
     },
 
     /** 取暂存图片中的一张（供界面逐张送入识别）。 */
-    'capture:zipItem': ({ itemId }) => {
+    'capture:zipItem': ({ itemId, withOriginal = false }) => {
       const it = batchStore.get(String(itemId || ''));
       if (!it) return { ok: false, error: '这张图已不在暂存中（可能已重新选择压缩包），请重新解包' };
-      return {
+      const out = {
         ok: true,
         itemId,
         name: it.name,
         mime: it.mime,
         imageBase64: it.bytes.toString('base64'),
       };
+      // 按需带上"未压缩的原始字节"：压缩过的图如果识别出问题（漏字、数量不符），
+      // 用户可以用原图重试一次 —— 压缩有时正是丢字的原因。
+      if (withOriginal && it.originalBytes && it.originalBytes !== it.bytes) {
+        out.originalBase64 = it.originalBytes.toString('base64');
+      }
+      return out;
+    },
+
+    /**
+     * 用"未压缩的原图"替换暂存里这一张。
+     *
+     * 场景：自动压缩把图缩得太狠，导致某张图识别漏题。
+     * 界面可以拿原图重新压一次（更保守的参数），或者干脆不压。
+     * 只影响这一张，不必重跑整批。
+     */
+    'capture:zipRestoreOriginal': ({ itemId }) => {
+      const it = batchStore.get(String(itemId || ''));
+      if (!it) return { ok: false, error: '这张图已不在暂存中' };
+      if (!it.originalBytes) {
+        return { ok: false, error: '这张图没有保留原图（可能本来就没压缩过）' };
+      }
+      it.bytes = it.originalBytes;
+      it.mime = it.originalMime || it.mime;
+      return { ok: true, itemId, mime: it.mime, size: it.bytes.length };
+    },
+
+    /**
+     * 界面把压缩后的图片回存到暂存。
+     *
+     * 为什么要回存：压缩发生在浏览器（canvas 是浏览器自带能力），
+     * 但"用原图重试"必须由服务端的暂存来提供原图。
+     * 所以这里把原图留住、把压缩后的字节换成当前版本。
+     * 只影响这一张，重跑单张即可，不必重跑整批。
+     */
+    'capture:zipSaveCompressed': ({ itemId, imageBase64, mime = 'image/jpeg' }) => {
+      const it = batchStore.get(String(itemId || ''));
+      if (!it) return { ok: false, error: '这张图已不在暂存中' };
+      const raw = String(imageBase64 || '').replace(/^data:[^,]+,/, '');
+      if (!raw) return { ok: false, error: '没有收到图片内容' };
+      let bytes;
+      try {
+        bytes = Buffer.from(raw, 'base64');
+      } catch {
+        return { ok: false, error: '图片内容解析失败' };
+      }
+      if (bytes.length === 0) return { ok: false, error: '压缩后的图片是空的' };
+      // 首次压缩时留住原图（重复调用不会把"已压缩的版本"当成原图）
+      if (!it.originalBytes) {
+        it.originalBytes = it.bytes;
+        it.originalMime = it.mime;
+      }
+      it.bytes = bytes;
+      it.mime = mime;
+      return { ok: true, itemId, mime, size: bytes.length };
     },
 
     /** 释放暂存（界面用完或用户取消时调用，避免占内存）。 */
@@ -302,7 +356,7 @@ function createHost(opts) {
       return { ok: true, released: n };
     },
 
-    'capture:extract': async ({ imageBase64, mime, answerInSource = true, saveImage = true }) => {
+    'capture:extract': async ({ imageBase64, mime, answerInSource = true, saveImage = true, sourceName = '' }) => {
       const bytes = Buffer.from(String(imageBase64).replace(/^data:[^,]+,/, ''), 'base64');
       if (bytes.length === 0) return { ok: false, error: '图片为空，请重新拍照' };
       let imagePath = '';
@@ -315,10 +369,16 @@ function createHost(opts) {
         const r = await model.extractQuestionsFromImage(modelConfig(), bytes, { mime, answerInSource });
         return {
           ok: true,
-          questions: r.questions.map((q) => ({ ...q, imagePath })),
+          // 给每道题带上"来自哪张图"，方便用户在核对页追溯是第几张出的问题
+          questions: r.questions.map((q) => ({ ...q, imagePath, sourceImage: sourceName || '' })),
           warnings: r.warnings,
           modelUsed: r.modelUsed,
           imagePath,
+          // 数量核对：模型说图里有几道 vs 实际抄出几条
+          claimedTotal: r.claimedTotal,
+          actualTotal: r.actualTotal,
+          countMismatch: Boolean(r.countMismatch),
+          incompleteCount: r.incompleteCount || 0,
         };
       } catch (e) {
         return { ok: false, error: e.message, code: e.code, imagePath };

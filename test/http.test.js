@@ -22,6 +22,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
 const { createShell, listen } = require('../src/shell-server.js');
 
 // 临时数据目录：与真实 data/ 完全隔离
@@ -296,6 +297,76 @@ async function main() {
   // 服务被拒绝大请求后仍然健康
   const aliveAfterBig = await fetch(`${BASE}/api/health`);
   check('超限请求之后服务仍然存活', aliveAfterBig.status === 200, `实际 ${aliveAfterBig.status}`);
+
+  console.log('\n[HTTP 外壳] 识别数量核对（用户报告的"13 题录成 15 题"）');
+  // 假读图模型：故意自报 13 道、却返回 15 条，其中一条标记为不完整。
+  // 这正是用户遇到的情形，端到端验证整条链路能否把它发现出来。
+  const fakeVision = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const questions = [];
+      for (let i = 1; i <= 15; i += 1) {
+        questions.push({
+          stem: `第 ${i} 题 ____ here.`,
+          options: { A: 'a', B: 'b', C: 'c', D: 'd' },
+          answer: 'B',
+          incomplete: i === 7,
+          incompleteReason: i === 7 ? '选项 D 被裁掉' : undefined,
+        });
+      }
+      const content = JSON.stringify({ totalInImage: 13, questions });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content } }] }));
+    });
+  });
+  await new Promise((r) => fakeVision.listen(0, '127.0.0.1', r));
+  shell.host.store.set({
+    baseUrl: `http://127.0.0.1:${fakeVision.address().port}/v1`,
+    apiKey: 'fake',
+    model: 'fake',
+    visionModel: 'fake',
+  });
+
+  const visionRes = await invoke('capture:extract', {
+    imageBase64: Buffer.from('fake image bytes').toString('base64'),
+    mime: 'image/png',
+    answerInSource: true,
+    saveImage: false,
+  });
+  check('识别结果里的题目照常返回', (visionRes.questions || []).length === 15,
+    `实际 ${(visionRes.questions || []).length}`);
+  check('接口报出"模型说 13 道"', visionRes.claimedTotal === 13, `实际 ${visionRes.claimedTotal}`);
+  check('接口报出"实际抄出 15 条"', visionRes.actualTotal === 15, `实际 ${visionRes.actualTotal}`);
+  check('接口明确标记数量不符', visionRes.countMismatch === true);
+  check('接口报出不完整题数', visionRes.incompleteCount === 1, `实际 ${visionRes.incompleteCount}`);
+  const vWarn = (visionRes.warnings || []).join(' ');
+  check('警告里说明了数量对不上及两个数字', /数量对不上/.test(vWarn) && /13/.test(vWarn) && /15/.test(vWarn),
+    vWarn.slice(0, 200));
+  check('警告里提示有不完整题并建议重新识别', /不完整/.test(vWarn) && /重新识别|重拍/.test(vWarn),
+    vWarn.slice(0, 200));
+  check('每道题带上了来源图片名（便于追溯是哪张出的问题）',
+    (visionRes.questions || []).every((q) => typeof q.sourceImage === 'string'));
+
+  // 用原图重试的支撑能力：压缩后仍能换回原图
+  if (upBody.items && upBody.items.length) {
+    const firstId = upBody.items[0].itemId;
+    // 模拟界面压缩后回存
+    const fakeCompressed = Buffer.from('compressed-bytes-not-really-an-image').toString('base64');
+    const saved = await invoke('capture:zipSaveCompressed', {
+      itemId: firstId,
+      imageBase64: fakeCompressed,
+      mime: 'image/jpeg',
+    });
+    check('压缩结果能回存到服务端（原图会被留住）', saved.ok === true, JSON.stringify(saved));
+    const restored = await invoke('capture:zipRestoreOriginal', { itemId: firstId });
+    check('能把这一张换回未压缩的原图', restored.ok === true, JSON.stringify(restored));
+    const afterRestore = await invoke('capture:zipItem', { itemId: firstId });
+    check('换回后取到的是原图（不是压缩版）',
+      afterRestore.ok === true && afterRestore.imageBase64 !== fakeCompressed,
+      '换回后应当拿到原始字节');
+  }
+  fakeVision.close();
   // 等于把"公开页泄露 token"这个漏洞当成期望行为锁住了。
   // 正确的不变量是：**任何返回给浏览器的 HTML 都不能含 token**。
   check('桥里不得内联 token（安全不变量）', !page.includes(token), '页面里出现了 token');
