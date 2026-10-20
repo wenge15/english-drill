@@ -324,6 +324,7 @@ screens.today = async () => {
         <button class="btn" id="startBtn">开始练习</button>
         <button class="btn ghost" id="seedBtn">试用：导入 6 道示例题</button>
       </div>
+      <div id="pendingRetry"></div>
     </div>
     <div class="card"><h2>未来 7 天复习量</h2><div id="forecast" class="muted">—</div></div>
     <div class="card">
@@ -444,8 +445,32 @@ screens.today = async () => {
     if (r.empty) return toast(r.message, 'err');
     go('practice', r.session, r.resumed);
   };
+
+  // 「继续重做上次的错题」：结果页只在练习结束那一刻显示入口，关掉窗口后用户回不去。
+  // 所以今日页异步查一次（不阻塞首屏），有未订正错题就给一个醒目入口。
+  const checkPendingRetry = async () => {
+    const box = $('#pendingRetry');
+    if (!box) return;
+    const r = await INVOKE('practice:pendingRetry');
+    if (!r.ok || !r.retry) { box.innerHTML = ''; return; }
+    const retry = r.retry;
+    box.innerHTML = `<button class="btn" id="resumeRetryBtn" style="margin-top:12px;background:var(--warn);color:#2a1c00">继续重做上次的错题（${retry.wrongCount} 道）</button>`;
+    $('#resumeRetryBtn').onclick = async () => {
+      const rr = await INVOKE('practice:retry', { sessionId: retry.sessionId });
+      if (!rr.ok) return toast(rr.error, 'err');
+      if (rr.empty) {
+        toast(rr.message || '错题已全部订正', 'okc');
+        box.innerHTML = '';
+        refresh();
+        return;
+      }
+      go('practice', rr.session, false);
+    };
+  };
+
   refresh();
   refreshSprint();
+  checkPendingRetry();
 };
 
 /* ---------------------------- 练习流程 ---------------------------- */
@@ -1648,10 +1673,21 @@ Answers: 21-B  22-C  23-B`;
       }
 
       verifyMap = {};
+      let filledCount = 0;
       for (const item of r.items || []) {
         const realIdx = idxMap[item.index];
         if (realIdx === undefined) continue;
         verifyMap[realIdx] = item;
+        // 自动补全解析：只补"无用解析"（空，或「卷面未标注答案 / 无法确定 / 看不清」这类占位），
+        // 绝不覆盖用户自己写好的解析；也绝不动 answer —— 冲突仍由用户对照原卷决定。
+        if (item.reason) {
+          const q = pending[realIdx];
+          const cur = String(q.explanation || '').trim();
+          if (!cur || /卷面未标注答案|无法确定|看不清/.test(cur)) {
+            pending[realIdx].explanation = item.reason;
+            filledCount += 1;
+          }
+        }
       }
 
       const conflicts = r.conflicts || 0;
@@ -1661,6 +1697,7 @@ Answers: 21-B  22-C  23-B`;
         ${conflicts ? `<b class="crit">不一致 ${conflicts}（请对照原卷确认）</b>` : '不一致 0'}｜
         无法判断 ${r.unknown}
         ${conflicts ? '<div style="margin-top:4px">下面标红的题就是答案可能被认错的，请重点看这几道。</div>' : ''}
+        ${filledCount ? `<div style="margin-top:4px"><span class="okc">已自动补全 ${filledCount} 道题的解析</span></div>` : ''}
       </div>`;
       // 只重绘标记：重新渲染题目列表（内容来自 pending，用户编辑已 collect 过）
       renderQList();

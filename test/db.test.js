@@ -297,3 +297,35 @@ test('设置读写带类型（数字不会被存成字符串）', () => {
   assert.strictEqual(repo.getSetting('shuffleOptions'), false);
   repo.close();
 });
+
+test('pendingRetrySession：未订正错题的会话能被找回，订正后消失', () => {
+  const repo = freshRepo();
+  repo.saveQuestion(mkQuestion(1));
+  repo.saveQuestion(mkQuestion(2));
+  const { session } = repo.startDailySession({ now: Date.now(), force: true });
+  const items = repo.sessionDetail(session.id).items;
+  const rightOf = (it) => repo.getQuestion(it.questionId).answer;
+
+  // 没有错题时查不到
+  assert.strictEqual(repo.pendingRetrySession(), null, '全新库不该有待重做的会话');
+
+  // 第 1 题做对，第 2 题做错 → 第 2 题未订正
+  repo.recordAnswer(session.id, items[0].questionId, rightOf(items[0]));
+  repo.recordAnswer(session.id, items[1].questionId, ['A', 'B', 'C', 'D'].find((L) => L !== rightOf(items[1])));
+  repo.finishSession(session.id);
+
+  let p = repo.pendingRetrySession();
+  assert.ok(p, '有未订正错题时应能找到会话');
+  assert.strictEqual(p.sessionId, session.id);
+  assert.strictEqual(p.wrongCount, 1, '只统计最终还没做对的题');
+
+  // 开重做轮并订正 → 查不到
+  repo.startRetryRound(session.id);
+  const round2 = repo.sessionDetail(session.id, Date.now(), 2).items;
+  repo.recordAnswer(session.id, round2[0].questionId, rightOf(round2[0]), { round: 2 });
+  repo.finishSession(session.id);
+
+  p = repo.pendingRetrySession();
+  assert.strictEqual(p, null, '订正完错题后不应再有待重做的会话');
+  repo.close();
+});

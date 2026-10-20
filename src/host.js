@@ -474,6 +474,14 @@ function createHost(opts) {
       if (r.items.length === 0) return { ok: true, empty: true, message: '错题已全部订正' };
       return { ok: true, session: repo.sessionDetail(sessionId, Date.now(), r.round) };
     },
+    /** 找「最近一个仍有未订正错题的会话」，供今日页提供"继续重做"入口。 */
+    'practice:pendingRetry': () => {
+      const r = repo.pendingRetrySession();
+      return {
+        ok: true,
+        retry: r ? { sessionId: r.sessionId, wrongCount: r.wrongCount, day: r.day } : null,
+      };
+    },
     'practice:history': ({ limit = 30 } = {}) => ({ ok: true, sessions: repo.recentSessions(limit) }),
     /** 回看某次练习的结果（结果页深链接 #session=<id> 用）。 */
     'practice:replay': ({ sessionId }) => {

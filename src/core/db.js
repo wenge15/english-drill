@@ -800,6 +800,47 @@ function createRepo(dbPath) {
   }
 
   /**
+   * 找「最近一个仍有未订正错题的会话」。
+   *
+   * 场景：结果页只在练习结束那一刻显示「重做错题」按钮，用户关掉窗口后就回不去了。
+   * 今日页需要一个入口让用户重新回到那个会话继续订正。
+   *
+   * 判定口径与 startRetryRound 完全一致 —— 按题分组、该题所有轮次 MAX(correct)=0
+   * （最终还没做对）。这样「这里看到的错题数」与「点进去真正重做的错题」对齐，
+   * 不会出现"提示有 N 道、进去却是别的数"的落差。
+   *
+   * SQLite 的 MAX 聚合会忽略 NULL：某题一轮做错(0)、下一轮还没答(NULL)时 MAX=0，
+   * 仍算未订正；所有轮次都 NULL（从没答过）时 MAX=NULL，不算错题。
+   */
+  function pendingRetrySession() {
+    const row = db
+      .prepare(
+        `SELECT pq.session_id AS id
+           FROM practice_questions pq
+          GROUP BY pq.session_id, pq.question_id
+         HAVING MAX(pq.correct) = 0
+          ORDER BY pq.session_id DESC
+          LIMIT 1`,
+      )
+      .get();
+    if (!row) return null;
+
+    const s = db.prepare('SELECT id, day, round FROM sessions WHERE id = ?').get(row.id);
+    if (!s) return null;
+
+    const wrongCount = db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM (
+           SELECT question_id FROM practice_questions WHERE session_id = ?
+           GROUP BY question_id HAVING MAX(correct) = 0
+         )`,
+      )
+      .get(row.id).c;
+
+    return { sessionId: s.id, day: s.day, round: s.round, wrongCount: Number(wrongCount) };
+  }
+
+  /**
    * 某道题的作答历史（倒序，最近的在最前）。
    * 用于"第二次做错时把前几次的答案摆给用户看"——这是最有说服力的讲评材料。
    */
@@ -1343,6 +1384,7 @@ function createRepo(dbPath) {
     sessionReplay,
     knowledgeStats,
     recentSessions,
+    pendingRetrySession,
     wrongBook,
     forecast,
     attemptHistory,

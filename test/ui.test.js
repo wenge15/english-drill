@@ -415,3 +415,23 @@ test('录入草稿：pending 提升到模块级，并用 localStorage 持久化'
   // 写入失败要静默降级（隐私模式），不能影响主流程
   assert.ok(/catch \(e\) \{ \/\* 隐私模式/.test(html), '写入失败应 try/catch 静默降级');
 });
+
+test('今日页：关掉窗口后仍能继续重做上次的错题', () => {
+  assert.ok(/practice:pendingRetry/.test(html), '应查询是否存在未订正的错题会话');
+  assert.ok(/id="pendingRetry"/.test(html), '今日页应有放「继续重做」按钮的容器');
+  assert.ok(/继续重做上次的错题/.test(html), '应有「继续重做上次的错题」按钮');
+  assert.ok(/id="resumeRetryBtn"/.test(html), '按钮应可点击触发重做');
+  assert.ok(/go\('practice', rr\.session, false\)/.test(html), '重做应进入练习页');
+});
+
+test('核对答案：自动补全解析，只补无用解析、不改答案', () => {
+  // 核对返回后把模型独立作答的依据写回 explanation
+  assert.ok(/pending\[realIdx\]\.explanation = item\.reason/.test(html), '应把模型的 reason 写回解析');
+  // 只补"无用解析"：空，或「卷面未标注答案 / 无法确定 / 看不清」这类占位
+  assert.ok(/卷面未标注答案\|无法确定\|看不清/.test(html), '应只匹配无用解析占位');
+  assert.ok(/if \(!cur \|\|/.test(html), '只有空或无用解析才补，不覆盖用户已写好的解析');
+  // 补全后要提示数量
+  assert.ok(/已自动补全 \$\{filledCount\} 道题的解析/.test(html), '应在核对结果里提示补全了多少道');
+  // 硬约束：只动 explanation，绝不动 answer（冲突仍由用户对照原卷决定）
+  assert.ok(!/pending\[realIdx\]\.answer\s*=/.test(html), '核对不得改答案');
+});
