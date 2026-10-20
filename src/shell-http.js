@@ -45,6 +45,24 @@ listen(shell, PORT, HOST)
     console.log(
       `[english-drill] API Key：${shell.host.store.get().apiKey ? '已配置' : '未配置（图片识别路径需要，文本导入不需要）'}`,
     );
+
+    // 启动时自动备份一次数据库。
+    //
+    // 教训：2026-10 用户的题库丢过一次 —— WAL 里是新数据、主库停在旧检查点，
+    // 而当时没有任何备份，只能靠手工解析 WAL 才救回来。所以现在每次启动都留一份
+    // 自洽快照（VACUUM INTO，不受 WAL 状态影响），保留最近 10 份。
+    // 备份失败只打日志，不阻塞启动。
+    try {
+      const bk = shell.host.repo.backupTo(path.join(DATA_DIR, 'backups'));
+      if (bk.ok) {
+        console.log(`[english-drill] 已备份数据库：${path.basename(bk.path)}（保留最近 ${bk.kept} 份）`);
+      } else {
+        console.error(`[english-drill] 备份数据库失败：${bk.error}`);
+      }
+    } catch (e) {
+      console.error(`[english-drill] 备份数据库异常：${e.message}`);
+    }
+
     // 把地址写盘，供启动脚本/快捷方式直接读取，避免 token 每次变化
     try {
       fs.writeFileSync(path.join(DATA_DIR, '.shell-url'), shell.url, 'utf8');

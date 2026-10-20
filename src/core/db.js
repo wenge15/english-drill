@@ -1281,8 +1281,50 @@ function createRepo(dbPath) {
     return { deleted: preview.counts, total: preview.total };
   }
 
+  /**
+   * 把当前数据库备份成一个**自洽快照**，保留最近 keep 份。
+   *
+   * 为什么必须用 VACUUM INTO，而不是直接复制 questions.db：
+   * 数据库跑在 WAL 模式，最近的写入可能还在 questions.db-wal 里没合并进主库。
+   * 直接复制主库文件会丢掉这些数据 —— 2026-10 真的因此丢过一次用户题库
+   * （主库停在旧检查点、WAL 里才是新数据，复制主库等于复制了空库）。
+   * VACUUM INTO 让 SQLite 自己生成一份完整、自洽的副本，不受 WAL 影响。
+   *
+   * 备份目录默认放在 data/backups/，文件名带时间戳；超出 keep 份就删最旧的。
+   * 失败只返回 { ok:false }，不抛错 —— 备份不该拖垮主流程。
+   */
+  function backupTo(dir, keep = 10) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const target = path.join(dir, `questions-${stamp}.db`);
+      // VACUUM INTO 的目标路径用单引号包裹，内部单引号转义两遍
+      db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+
+      // 只保留最近 keep 份（按文件名=时间戳 排序）
+      const files = fs
+        .readdirSync(dir)
+        .filter((f) => /^questions-.*\.db$/.test(f))
+        .sort();
+      let removed = 0;
+      while (files.length > keep) {
+        const old = files.shift();
+        try {
+          fs.unlinkSync(path.join(dir, old));
+          removed += 1;
+        } catch {
+          /* 删不掉就算了，下次再说 */
+        }
+      }
+      return { ok: true, path: target, kept: files.length, removed };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
   return {
     raw: db,
+    backupTo,
     saveQuestion,
     updateQuestion,
     listQuestions,
