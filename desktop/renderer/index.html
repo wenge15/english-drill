@@ -464,7 +464,7 @@ screens.today = async () => {
         refresh();
         return;
       }
-      go('practice', rr.session, false);
+      go('practice', rr.session, Boolean(rr.resumed));
     };
   };
 
@@ -787,7 +787,7 @@ function renderResultCard(main, s, replay, partial) {
       const rr = await INVOKE('practice:retry', { sessionId: s.sessionId });
       if (!rr.ok) return toast(rr.error, 'err');
       if (rr.empty) { toast('错题已全部订正'); go('today'); return; }
-      go('practice', rr.session, false);
+      go('practice', rr.session, Boolean(rr.resumed));
     };
   }
   $('#againBtn').onclick = () => { location.hash = ''; go('today'); };

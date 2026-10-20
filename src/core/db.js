@@ -720,10 +720,73 @@ function createRepo(dbPath) {
     };
   }
 
+  /**
+   * 压缩并清理空的重做轮，让 round 真正表示"做了几轮"。
+   *
+   * 背景 bug：startRetryRound 每次调用都 round+1，用户点几次「继续重做」就 +1，
+   * 即使完全没作答也涨轮次，界面会显示「第 5 轮」这种假轮次。
+   *
+   * 规则：
+   *  - 保留第 1 轮（首轮，即使没做完也保留）+ 所有 answered>0 的轮次；
+   *  - 其余"完全没作答"的重做轮（round>1 且 answered=0）整轮 DELETE；
+   *  - 保留的轮次按升序压缩成连续 1..N（先删空轮、再升序压缩，目标位置必然空着，
+   *    不会撞 UNIQUE(session_id, question_id, round) 约束）。
+   */
+  function normalizeRounds(sessionId) {
+    const rows = db
+      .prepare(
+        `SELECT round, SUM(CASE WHEN picked IS NOT NULL THEN 1 ELSE 0 END) AS answered
+           FROM practice_questions WHERE session_id = ?
+          GROUP BY round ORDER BY round`,
+      )
+      .all(sessionId);
+
+    if (rows.length === 0) return;
+
+    // 1) 保留第 1 轮 + 所有有作答的轮次
+    const keep = rows.filter((r) => r.round === 1 || r.answered > 0).map((r) => r.round);
+
+    // 2) 删除"完全没作答"的重做轮（第 1 轮永远不会被删）
+    for (const r of rows) {
+      if (!keep.includes(r.round)) {
+        db.prepare('DELETE FROM practice_questions WHERE session_id = ? AND round = ?').run(sessionId, r.round);
+      }
+    }
+
+    // 3) 升序压缩成 1..N。升序处理 + oldRound >= newRound 恒成立，目标位置一定空着。
+    keep.forEach((oldRound, i) => {
+      const newRound = i + 1;
+      if (oldRound !== newRound) {
+        db.prepare('UPDATE practice_questions SET round = ? WHERE session_id = ? AND round = ?')
+          .run(newRound, sessionId, oldRound);
+      }
+    });
+
+    // 4) 对齐 sessions.round 为压缩后的最大轮次
+    db.prepare('UPDATE sessions SET round = ? WHERE id = ?').run(keep.length, sessionId);
+  }
+
   /** 开启错题重做轮：错题在新一轮重新排入，选项重新打乱。 */
   function startRetryRound(sessionId, opts = {}) {
+    // 先清理空轮并对齐轮次，避免"点几次就涨几轮"的假轮次。
+    normalizeRounds(sessionId);
     const s = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId);
     if (!s) return null;
+
+    // 若当前轮（round>1）仍有未作答的题，说明上次点「继续重做」后没做完，
+    // 直接续做这一轮：不递增、不建新轮。第 1 轮未做完不走这里（首轮语义不同）。
+    if (s.round > 1) {
+      const pending = db
+        .prepare('SELECT COUNT(*) c FROM practice_questions WHERE session_id = ? AND round = ? AND picked IS NULL')
+        .get(sessionId, s.round).c;
+      if (pending > 0) {
+        const items = db
+          .prepare('SELECT question_id FROM practice_questions WHERE session_id = ? AND round = ? ORDER BY position')
+          .all(sessionId, s.round)
+          .map((r) => r.question_id);
+        return { round: s.round, resumed: true, items };
+      }
+    }
 
     // 找出"在任一已完成的轮次里最终仍未做对"的题
     const rows = db

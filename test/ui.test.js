@@ -421,7 +421,15 @@ test('今日页：关掉窗口后仍能继续重做上次的错题', () => {
   assert.ok(/id="pendingRetry"/.test(html), '今日页应有放「继续重做」按钮的容器');
   assert.ok(/继续重做上次的错题/.test(html), '应有「继续重做上次的错题」按钮');
   assert.ok(/id="resumeRetryBtn"/.test(html), '按钮应可点击触发重做');
-  assert.ok(/go\('practice', rr\.session, false\)/.test(html), '重做应进入练习页');
+  assert.ok(/go\('practice', rr\.session, Boolean\(rr\.resumed\)\)/.test(html), '重做应进入练习页并带上 resumed');
+});
+
+test('重做错题：今日页与结果页都把 resumed 传给练习页，续做时跳过已答题', () => {
+  // 两处 practice:retry 的 go('practice', ...) 第三参都应是 Boolean(rr.resumed)
+  const calls = html.match(/go\('practice', rr\.session, Boolean\(rr\.resumed\)\)/g) || [];
+  assert.strictEqual(calls.length, 2, '今日页与结果页两处都应把 resumed 传给练习页');
+  // 结果页的 #retryBtn 也是同一写法，不应有残留的写死 false 版本
+  assert.ok(!/go\('practice', rr\.session, false\)/.test(html), '不应再有写死 resumed=false 的调用');
 });
 
 test('核对答案：自动补全解析，只补无用解析、不改答案', () => {

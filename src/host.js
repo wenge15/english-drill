@@ -472,7 +472,11 @@ function createHost(opts) {
       const r = repo.startRetryRound(sessionId);
       if (!r) return { ok: false, error: '练习会话不存在' };
       if (r.items.length === 0) return { ok: true, empty: true, message: '错题已全部订正' };
-      return { ok: true, session: repo.sessionDetail(sessionId, Date.now(), r.round) };
+      return {
+        ok: true,
+        session: repo.sessionDetail(sessionId, Date.now(), r.round),
+        resumed: Boolean(r.resumed),
+      };
     },
     /** 找「最近一个仍有未订正错题的会话」，供今日页提供"继续重做"入口。 */
     'practice:pendingRetry': () => {

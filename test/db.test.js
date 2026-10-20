@@ -329,3 +329,110 @@ test('pendingRetrySession：未订正错题的会话能被找回，订正后消�
   assert.strictEqual(p, null, '订正完错题后不应再有待重做的会话');
   repo.close();
 });
+
+test('startRetryRound：重做轮没做完时续做，不虚涨轮次', () => {
+  const repo = freshRepo();
+  repo.saveQuestion(mkQuestion(1));
+  repo.saveQuestion(mkQuestion(2));
+  repo.saveQuestion(mkQuestion(3));
+  const { session } = repo.startDailySession({ now: Date.now(), force: true });
+  const items = repo.sessionDetail(session.id).items;
+  const rightOf = (it) => repo.getQuestion(it.questionId).answer;
+
+  // 第1轮：1题对、2题错
+  repo.recordAnswer(session.id, items[0].questionId, rightOf(items[0]));
+  repo.recordAnswer(session.id, items[1].questionId, ['A', 'B', 'C', 'D'].find((L) => L !== rightOf(items[1])));
+  repo.recordAnswer(session.id, items[2].questionId, ['A', 'B', 'C', 'D'].find((L) => L !== rightOf(items[2])));
+  repo.finishSession(session.id);
+
+  // 第一次开重做轮 = 新建第2轮
+  const r1 = repo.startRetryRound(session.id);
+  assert.strictEqual(r1.round, 2);
+  assert.strictEqual(r1.items.length, 2);
+  assert.ok(!r1.resumed, '第一次开重做轮应是新建，不是续做');
+
+  // 只答第2轮的一题（部分作答）
+  const round2 = repo.sessionDetail(session.id, Date.now(), 2).items;
+  repo.recordAnswer(session.id, round2[0].questionId, rightOf(round2[0]), { round: 2 });
+
+  // 再点「继续重做」：当前第2轮没做完 → 续做，不涨轮
+  const r2 = repo.startRetryRound(session.id);
+  assert.strictEqual(r2.round, 2, '没做完时不应涨到第 3 轮');
+  assert.strictEqual(r2.resumed, true, '应标记为续做');
+  assert.strictEqual(r2.items.length, 2, '续做应包含该轮全部题');
+  repo.close();
+});
+
+test('startRetryRound：清理脏数据里的空轮并压缩编号', () => {
+  const repo = freshRepo();
+  const a = repo.saveQuestion(mkQuestion(1));
+  const b = repo.saveQuestion(mkQuestion(2));
+  const c = repo.saveQuestion(mkQuestion(3));
+  const { session } = repo.startDailySession({ now: Date.now(), force: true });
+  const r1 = repo.sessionDetail(session.id).items;
+  const rightOf = (it) => repo.getQuestion(it.questionId).answer;
+  repo.recordAnswer(session.id, r1[0].questionId, rightOf(r1[0])); // A 对
+  repo.recordAnswer(session.id, r1[1].questionId, ['A', 'B', 'C', 'D'].find((L) => L !== rightOf(r1[1]))); // B 错
+  repo.recordAnswer(session.id, r1[2].questionId, ['A', 'B', 'C', 'D'].find((L) => L !== rightOf(r1[2]))); // C 错
+  repo.finishSession(session.id);
+
+  // 直接造脏数据（复现老 bug 后的库）：第2/4/5轮空，第3轮只答了1题
+  const ins = repo.raw.prepare(
+    'INSERT INTO practice_questions(session_id, question_id, position, round, correct, picked) VALUES(?,?,?,?,?,?)',
+  );
+  ins.run(session.id, b.id, 0, 2, null, null);
+  ins.run(session.id, c.id, 1, 2, null, null);
+  ins.run(session.id, b.id, 0, 3, 1, 'B'); // 第3轮 B 做对了
+  ins.run(session.id, c.id, 1, 3, null, null);
+  ins.run(session.id, b.id, 0, 4, null, null);
+  ins.run(session.id, c.id, 1, 4, null, null);
+  ins.run(session.id, b.id, 0, 5, null, null);
+  ins.run(session.id, c.id, 1, 5, null, null);
+  repo.raw.prepare('UPDATE sessions SET round = 5 WHERE id = ?').run(session.id);
+
+  // 触发 normalizeRounds（通过 startRetryRound）
+  const r = repo.startRetryRound(session.id);
+
+  // 第3轮(B做对、C未答) 应被压缩成第2轮；第2/4/5空轮被删；C 未答 → 续做
+  assert.strictEqual(r.resumed, true, '压缩后当前轮仍有未作答的 C，应续做');
+  assert.strictEqual(r.round, 2, '空轮清理后编号应压缩回第2轮');
+
+  const rounds = repo.raw
+    .prepare('SELECT DISTINCT round AS r FROM practice_questions WHERE session_id = ? ORDER BY r')
+    .all(session.id)
+    .map((x) => x.r);
+  assert.deepStrictEqual(rounds, [1, 2], '空轮应被删除、编号连续');
+  assert.strictEqual(repo.raw.prepare('SELECT round FROM sessions WHERE id = ?').get(session.id).round, 2);
+  void a;
+  repo.close();
+});
+
+test('startRetryRound：当前重做轮做完且仍有错题，才涨到下一轮', () => {
+  const repo = freshRepo();
+  repo.saveQuestion(mkQuestion(1));
+  repo.saveQuestion(mkQuestion(2));
+  repo.saveQuestion(mkQuestion(3));
+  const { session } = repo.startDailySession({ now: Date.now(), force: true });
+  const items = repo.sessionDetail(session.id).items;
+  const rightOf = (it) => repo.getQuestion(it.questionId).answer;
+
+  repo.recordAnswer(session.id, items[0].questionId, rightOf(items[0])); // 对
+  repo.recordAnswer(session.id, items[1].questionId, ['A', 'B', 'C', 'D'].find((L) => L !== rightOf(items[1]))); // 错
+  repo.recordAnswer(session.id, items[2].questionId, ['A', 'B', 'C', 'D'].find((L) => L !== rightOf(items[2]))); // 错
+  repo.finishSession(session.id);
+
+  const r1 = repo.startRetryRound(session.id);
+  assert.strictEqual(r1.round, 2);
+  const round2 = repo.sessionDetail(session.id, Date.now(), 2).items;
+  // 第2轮：一题做对、另一题再做错（仍错）
+  repo.recordAnswer(session.id, round2[0].questionId, rightOf(round2[0]), { round: 2 });
+  repo.recordAnswer(session.id, round2[1].questionId, ['A', 'B', 'C', 'D'].find((L) => L !== rightOf(round2[1])), { round: 2 });
+  repo.finishSession(session.id);
+
+  // 第2轮已做完，但还有一题仍错 → 才开第3轮
+  const r3 = repo.startRetryRound(session.id);
+  assert.strictEqual(r3.round, 3, '做完第2轮且仍有错题才涨到第3轮');
+  assert.strictEqual(r3.items.length, 1, '第3轮只剩那道仍错的题');
+  assert.ok(!r3.resumed);
+  repo.close();
+});
