@@ -80,6 +80,40 @@ function ping() {
   });
 }
 
+/**
+ * 隐藏 Edge 的首次运行体验（"Microsoft 尊重您的隐私"向导）。
+ *
+ * 为什么：`--no-first-run` 是 Chrome 的参数，对 Edge **定制的**首次运行体验（FRE）
+ * 无效 —— 用户每次打开都弹隐私设置。官方文档给出的可靠方案是
+ * HideFirstRunExperience 策略（写 HKCU 注册表，当前用户无需管理员权限）。
+ *
+ * 副作用说明：这个策略是**全局**的（对用户自己的 Edge 也生效）。但它只做一件事
+ * —— 隐藏"首次运行向导"，对早已完成首次运行的用户 Edge 没有任何影响。
+ * 这正是用户想要的：再也不要看到那个隐私弹窗。
+ *
+ * 幂等：每次启动都写一遍（/f 强制覆盖），即使之前写过也不报错。
+ */
+function hideEdgeFirstRun() {
+  try {
+    execFileSync(
+      'reg',
+      [
+        'add',
+        'HKCU\\SOFTWARE\\Policies\\Microsoft\\Edge',
+        '/v', 'HideFirstRunExperience',
+        '/t', 'REG_DWORD',
+        '/d', '1',
+        '/f',
+      ],
+      { stdio: 'ignore', windowsHide: true },
+    );
+    return true;
+  } catch {
+    // 写不了（某些受限环境）就静默继续 —— 不影响开窗口，只是可能仍会弹一次向导
+    return false;
+  }
+}
+
 /** 在当前目录下找 Edge（应用模式需要一个基于 Chromium 的浏览器）。 */
 function findEdge() {
   const candidates = [
@@ -164,6 +198,14 @@ function findEdge() {
       fs.mkdirSync(profileDir, { recursive: true });
     } catch {
       /* 建不了就退回默认行为 */
+    }
+    // 双保险：写官方策略 + 清掉首次启动标记文件，避免 FRE 弹窗。
+    hideEdgeFirstRun();
+    try {
+      // Edge 检测到这个文件就会认定"安装后首次启动"，从而触发隐私向导
+      fs.unlinkSync(path.join(profileDir, 'FirstLaunchAfterInstallation'));
+    } catch {
+      /* 文件不存在或删不掉，无所谓 */
     }
     const args = [
       `--app=${url}`,
