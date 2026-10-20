@@ -254,33 +254,30 @@ const screens = {};
 let current = 'today';
 
 /* -------------------- 录入草稿（模块级状态） --------------------
- * pending / excluded / pendingSource 提升到模块级：切页面（go）不再重建
+ * pending / pendingSource 提升到模块级：切页面（go）不再重建
  * 录入页闭包，所以这些状态不会丢；再配合 localStorage
  * （capture-draft-v1）持久化，误触刷新/重启也不丢。
  *
- * 纯序列化/恢复与「残缺题分离」的逻辑抽在 src/core/draft.js（可单测），
+ * 纯序列化/恢复与「不完整题统计」的逻辑抽在 src/core/draft.js（可单测），
  * 下面内联实现与之保持同等语义（前端是内联 JS，无构建，无法 require）。
  * ---------------------------------------------------------------- */
-let pending = [];       // 待确认入库的题（只放完整题）
-let excluded = [];      // 被自动排除的疑似残缺题（可查看并恢复）
+let pending = [];       // 待确认入库的题
 let pendingSource = 'text';
 
-/** 把识别结果按「是否残缺」拆成可入库 / 疑似残缺（被裁进画面）两组。 */
-function splitIncomplete(list) {
-  const complete = [];
-  const excludedList = [];
+/** 统计 incomplete===true 的题数，用于提醒用户核对补充（不是排除）。 */
+function countIncomplete(list) {
+  let n = 0;
   for (const q of list || []) {
-    if (q && q.incomplete === true) excludedList.push(q);
-    else complete.push(q);
+    if (q && q.incomplete === true) n += 1;
   }
-  return { complete, excluded: excludedList };
+  return n;
 }
 
 const DRAFT_KEY = 'capture-draft-v1';
-/** 每次 pending/excluded 变化后调用；写入失败（隐私模式）静默降级。 */
+/** 每次 pending 变化后调用；写入失败（隐私模式）静默降级。 */
 function saveDraft() {
   try {
-    const state = { pending, excluded, pendingSource, savedAt: new Date().toISOString() };
+    const state = { pending, pendingSource, savedAt: new Date().toISOString() };
     localStorage.setItem(DRAFT_KEY, JSON.stringify(state));
   } catch (e) { /* 隐私模式或写满：静默降级，不影响主流程 */ }
 }
@@ -297,7 +294,6 @@ function loadDraft() {
     if (!obj || !Array.isArray(obj.pending)) return null;
     return {
       pending: obj.pending,
-      excluded: Array.isArray(obj.excluded) ? obj.excluded : [],
       pendingSource: typeof obj.pendingSource === 'string' ? obj.pendingSource : 'text',
       savedAt: obj.savedAt || null,
     };
@@ -800,7 +796,11 @@ screens.capture = async () => {
    * 不能放进 renderReview 里 —— 那样会"要用它去触发它自己"，永远调不到。
    */
   window.__setPending = (questions) => {
+    // 用 ...q 展开保留全部字段（incomplete / incompleteReason / sourceImage / number 等），
+    // 只对必需字段兜默认值。以前这里是手写白名单，漏了 incomplete，导致
+    // 「不完整题提示」这类功能在测试里假阴性（真实识别路径不受影响，但测试不可靠）。
     pending = (questions || []).map((q) => ({
+      ...q,
       stem: q.stem || '',
       options: q.options || {},
       answer: q.answer || '',
@@ -810,7 +810,6 @@ screens.capture = async () => {
       answerInSource: q.answerInSource !== undefined ? q.answerInSource : true,
       groupName: q.groupName || '',
     }));
-    excluded = [];
     saveDraft();
     if (pending.length === 0) {
       $('#reviewArea').innerHTML = '';
@@ -996,7 +995,6 @@ Answers: 21-B  22-C  23-B`;
     // 入库时统一归入所选分组
     const gname = ($('#importGroup')?.value || '').trim();
     pending = r.questions.map((q) => ({ ...q, groupName: gname }));
-    excluded = [];
     pendingSource = 'text';
     saveDraft();
     renderReview(r.warnings);
@@ -1059,13 +1057,12 @@ Answers: 21-B  22-C  23-B`;
         <div class="muted" style="margin-top:8px">可以改用「文本导入」，或在设置里换一个更强的读图模型。</div></div>`;
       return;
     }
-    const split = splitIncomplete(all);
-    pending = split.complete;
-    excluded = split.excluded;
+    const inc = countIncomplete(all);
+    pending = all;
     pendingSource = 'image';
     saveDraft();
-    if (split.excluded.length) {
-      warns.push(`已自动排除 ${split.excluded.length} 道疑似残缺题（可能是上一页/下一页被裁进画面的题），可在核对区查看并恢复。`);
+    if (inc > 0) {
+      warns.push(`有 ${inc} 道题选项可能不完整（被页面边缘裁掉），请核对补充。`);
     }
     renderReview(warns);
   };
@@ -1363,17 +1360,16 @@ Answers: 21-B  22-C  23-B`;
       out.innerHTML += `<div class="warnbox" style="margin-top:10px">没有识别出任何题目。可以逐张重试，或换一个更强的读图模型。</div>`;
       return;
     }
-    const split = splitIncomplete(all);
-    pending = split.complete;
-    excluded = split.excluded;
+    const inc = countIncomplete(all);
+    pending = all;
     pendingSource = 'image';
     saveDraft();
-    if (split.excluded.length) {
-      warns.push(`已自动排除 ${split.excluded.length} 道疑似残缺题（可能是上一页/下一页被裁进画面的题），可在核对区查看并恢复。`);
+    if (inc > 0) {
+      warns.push(`有 ${inc} 道题选项可能不完整（被页面边缘裁掉），请核对补充。`);
     }
     toast(
-      `整包识别完成：${split.complete.length} 道题，请核对` +
-        (split.excluded.length ? `（已自动排除 ${split.excluded.length} 道疑似残缺题）` : ''),
+      `整包识别完成：${all.length} 道题，请核对` +
+        (inc > 0 ? `（其中 ${inc} 道选项可能不完整）` : ''),
       'okc',
     );
     renderReview(warns);
@@ -1527,6 +1523,7 @@ Answers: 21-B  22-C  23-B`;
     // 换了批次就清掉上一轮的核对结果，否则标记会串到新题上（下标含义已变）
     if (!keepVerify) verifyMap = {};
     const needFix = pending.filter((q) => !q.stem || Object.keys(q.options || {}).length < 2 || !q.answer).length;
+    const incCount = countIncomplete(pending);
     const groupName = ($('#importGroup')?.value || '').trim();
     $('#reviewArea').innerHTML = `
       <div class="card">
@@ -1538,14 +1535,10 @@ Answers: 21-B  22-C  23-B`;
           </label>
         </div>
         ${warns && warns.length ? `<div class="warnbox">解析时有 ${warns.length} 处要你确认：<ul>${warns.slice(0, 12).map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
-        ${excluded.length ? `
+        ${incCount > 0 ? `
           <div class="warnbox" style="margin-bottom:10px">
-            <b>已自动排除 ${excluded.length} 道疑似残缺题</b>
-            <span class="muted">（可能是上一页/下一页被裁进画面的题，未放进待入库列表）</span>
-            <div class="row" style="margin-top:6px">
-              <button class="btn ghost" id="excludedToggle" style="padding:5px 12px;font-size:12.5px">查看并恢复</button>
-            </div>
-            <div id="excludedList" style="display:none;margin-top:10px"></div>
+            <b>有 ${incCount} 道题选项可能不完整</b>
+            <span class="muted">（可能被页面边缘裁掉，请核对补充）</span>
           </div>` : ''}
         <div class="hintbox" style="margin-bottom:10px">
           <b>答案不一定对。</b>读图会认错字母（B 认成 8）、答案栏可能串行，模型自己判断也可能错。
@@ -1607,49 +1600,11 @@ Answers: 21-B  22-C  23-B`;
     $('#clearAll').onclick = () => {
       if (!confirm(`确定清空全部 ${pending.length} 道待入库的题？\n\n（这些题还没入库，清空后需要重新粘贴）`)) return;
       pending = [];
-      excluded = [];
       saveDraft();
       $('#reviewArea').innerHTML = '<div class="card"><div class="muted">已清空待入库的题目。</div></div>';
     };
 
     renderQList();
-
-    // 疑似残缺题的查看/恢复：默认折叠，点「查看并恢复」展开，逐题可恢复回核对列表。
-    if ($('#excludedToggle')) {
-      $('#excludedToggle').onclick = () => {
-        const box = $('#excludedList');
-        if (!box) return;
-        const showing = box.style.display !== 'none';
-        box.style.display = showing ? 'none' : '';
-        $('#excludedToggle').textContent = showing ? '查看并恢复' : '收起';
-      };
-    }
-    const excludedList = $('#excludedList');
-    if (excludedList) {
-      excludedList.innerHTML = excluded
-        .map((q, i) => {
-          const stem = String(q.stem || '(无题干)').trim();
-          const summary = stem.length > 60 ? `${stem.slice(0, 60)}…` : stem;
-          return `<div class="qitem" style="margin-bottom:8px">
-            <div class="st">${esc(summary)}</div>
-            <div class="meta">${q.incompleteReason ? esc(`原因：${q.incompleteReason}`) : '未说明原因'}</div>
-            <div class="row" style="margin-top:6px">
-              <button class="btn ghost" data-restore="${i}" style="padding:3px 10px;font-size:12px">恢复到核对列表</button>
-            </div>
-          </div>`;
-        })
-        .join('');
-      excludedList.querySelectorAll('[data-restore]').forEach((b) => {
-        b.onclick = () => {
-          const [q] = excluded.splice(Number(b.dataset.restore), 1);
-          if (q) {
-            pending.push(q);
-            saveDraft();
-            renderReview([]);
-          }
-        };
-      });
-    }
 
     /**
      * 核对答案：让模型独立重做一遍，与识别出的答案比对。
@@ -1734,7 +1689,7 @@ Answers: 21-B  22-C  23-B`;
       const msg = `已入库 ${r.created} 道${r.skipped ? `，跳过重复 ${r.skipped} 道` : ''}${r.failed ? `，失败 ${r.failed} 道` : ''}`
         + (groups.length ? `，归入「${groups.join('、')}」` : '');
       toast(msg, r.failed ? 'err' : 'okc');
-      pending = []; excluded = []; images = []; renderThumbs();
+      pending = []; images = []; renderThumbs();
       clearDraft(); // 入库成功后清除草稿，避免下次误恢复已入库的题
       $('#reviewArea').innerHTML = `<div class="card"><div class="okc">${esc(msg)}</div>
         <div class="row" style="margin-top:12px">
@@ -1744,7 +1699,7 @@ Answers: 21-B  22-C  23-B`;
       $('#goPractice').onclick = () => go('today');
       $('#goGroups').onclick = () => go('groups');
     };
-    $('#dropAll').onclick = () => { pending = []; excluded = []; saveDraft(); $('#reviewArea').innerHTML = ''; };
+    $('#dropAll').onclick = () => { pending = []; saveDraft(); $('#reviewArea').innerHTML = ''; };
   }
 
   /**
@@ -2082,7 +2037,6 @@ Answers: 21-B  22-C  23-B`;
     // 供测试驱动真实渲染（与用户从整包识别得到结果时走的是同一条路）
     setPending: (list) => {
       pending = list;
-      excluded = [];
       pendingSource = 'image';
     },
     render: () => renderReview([]),
@@ -2122,9 +2076,8 @@ Answers: 21-B  22-C  23-B`;
   let restored = false;
   if (pending.length === 0) {
     const draft = loadDraft();
-    if (draft && (draft.pending.length > 0 || draft.excluded.length > 0)) {
+    if (draft && draft.pending.length > 0) {
       pending = draft.pending;
-      excluded = draft.excluded;
       pendingSource = draft.pendingSource || 'image';
       restored = true;
     }
@@ -2132,10 +2085,10 @@ Answers: 21-B  22-C  23-B`;
   // 关键：screens.capture 每次进入都会重建 HTML（核对区初始为空），
   // 所以无论 pending 是「切页后仍留在内存里」还是「刚从 localStorage 恢复」，
   // 只要有待处理内容就要重新渲染核对区，否则题目在内存里却不显示。
-  if (pending.length > 0 || excluded.length > 0) {
+  if (pending.length > 0) {
     renderReview([]);
     if (restored) {
-      toast(`已恢复上次未完成的录入（${pending.length} 道题${excluded.length ? `，另有 ${excluded.length} 道疑似残缺题` : ''}）`, 'okc');
+      toast(`已恢复上次未完成的录入（${pending.length} 道题）`, 'okc');
     }
   }
 };

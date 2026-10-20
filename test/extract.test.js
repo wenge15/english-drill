@@ -164,14 +164,17 @@ test('提示词包含关键约束，避免模型自由发挥', () => {
   assert.ok(withAnswer.includes('答案'), '有答案场景应提示寻找印刷答案');
 });
 
-test('提示词明确要求排除被裁断的残缺题（只录完整题）', () => {
+test('提示词按「题干是否在画面里」判定录入，而非按是否残缺排除', () => {
   const p = ex.buildVisionPrompt({ answerInSource: true });
-  assert.ok(/只录入/.test(p), '必须强调只录入完整题');
-  assert.ok(/完全在画面内/.test(p), '必须强调题目要完整且在画面内');
-  assert.ok(/顶部/.test(p) && /底部/.test(p) && /侧边/.test(p), '必须点名被页面顶部/底部/侧边裁断');
-  assert.ok(/裁断/.test(p), '必须使用「裁断」表述');
-  assert.ok(/优先直接不要录入/.test(p), '必须要求优先不录入被裁断的题');
-  assert.ok(/不要放进 questions/.test(p), '必须明确不放进 questions 数组');
+  assert.ok(/题干/.test(p), '判定标准必须围绕题干');
+  assert.ok(/在画面里/.test(p) && /不在画面里/.test(p), '必须区分题干在画面里 / 不在画面里两种情况');
+  // 题干在画面里（选项不全）→ 必须录入，只是标 incomplete 提醒补全，不是排除
+  assert.ok(/必须录入/.test(p), '题干在画面里时必须录入');
+  assert.ok(/不是排除/.test(p), '选项不全只是提醒补全，不是排除');
+  // 题干完全不在画面里（只有选项/碎片）→ 不录入
+  assert.ok(/不要放进 questions/.test(p), '题干不在画面里时不要放进 questions 数组');
+  // 不能再要求「优先直接不要录入」被裁断的题
+  assert.ok(!/优先直接不要录入/.test(p), '不应再按「被裁断就排除」来处理');
 });
 
 test('补全提示词带上了题干与选项', () => {

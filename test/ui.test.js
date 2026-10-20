@@ -290,8 +290,8 @@ test('整包识别：能选 ZIP、逐张识别、可暂停、失败可重试', (
 
 test('整包识别：结果走与单张识别相同的核对入库路径', () => {
   // 不另起一套入库流程，避免两处行为不一致
-  const fn = html.slice(html.indexOf('function collectZipResults'), html.indexOf('function collectZipResults') + 1400);
-  assert.ok(/pending = split\.complete/.test(fn), '应把分离后的完整题放进 pending');
+  const fn = html.slice(html.indexOf('function collectZipResults'), html.indexOf('function collectZipResults') + 900);
+  assert.ok(/pending = all/.test(fn), '应把结果放进 pending');
   assert.ok(/renderReview/.test(fn), '应走同一个核对页');
 });
 
@@ -383,23 +383,23 @@ test('整包识别：点文件名能看图片，方便核对题目', () => {
   assert.ok(/% items\.length/.test(vs), '翻页应循环');
 });
 
-test('识图默认排除残缺题：分离逻辑是纯函数，核对页有提示条与恢复入口', () => {
-  // 分离逻辑抽成纯函数（完整题 vs 疑似残缺题），可单测（src/core/draft.js）
-  assert.ok(/function splitIncomplete/.test(html), '应有把残缺题分离出去的纯函数');
-  assert.ok(/incomplete === true/.test(html), '应以 incomplete===true 作为排除依据');
-  // 单张识别与整包识别都要经过分离（走同一条逻辑）
-  assert.ok(/splitIncomplete\(all\)/.test(html), '识别结果应经过 splitIncomplete 分离');
-  // 核对页要有醒目提示条与「查看并恢复」按钮
-  assert.ok(/已自动排除 \$\{excluded\.length\} 道疑似残缺题/.test(html), '应有排除残缺题的醒目提示条');
-  assert.ok(/查看并恢复/.test(html), '应有「查看并恢复」按钮');
-  assert.ok(/恢复到核对列表/.test(html), '每道被排除的题应能恢复到核对列表');
-  assert.ok(/incompleteReason/.test(html), '被排除的题应展示 incompleteReason（为什么被裁断）');
+test('不完整题正常录入：核对页提示「有 N 道题选项可能不完整」，不排除', () => {
+  // 判定标准是题干是否在画面里，残缺题（选项被裁掉）仍要录入，只是提醒补全
+  assert.ok(/function countIncomplete/.test(html), '应有统计不完整题数的纯函数');
+  assert.ok(/incomplete === true/.test(html), '应依据 incomplete===true 计数');
+  // 单张识别与整包识别都不再分离，直接 pending = all
+  assert.ok(/pending = all/.test(html), '识别结果应整体放进 pending，不排除残缺题');
+  // 核对页显示的是「提醒补全」的提示条，而非「排除/恢复」
+  assert.ok(/有 \$\{incCount\} 道题选项可能不完整/.test(html), '核对页应提示选项可能不完整');
+  assert.ok(/请核对补充/.test(html), '提示应是提醒补全而非排除');
+  // 不再有「查看并恢复」这类排除机制
+  assert.ok(!/查看并恢复/.test(html), '不应再有排除后的恢复入口');
+  assert.ok(!/已自动排除/.test(html), '不应再出现「已自动排除」');
 });
 
-test('录入草稿：pending/excluded 提升到模块级，并用 localStorage 持久化', () => {
+test('录入草稿：pending 提升到模块级，并用 localStorage 持久化', () => {
   // 模块级变量（不再因切页面重建 screens.capture 闭包而丢失）
   assert.ok(/let pending = \[\];/.test(html), 'pending 应为模块级变量');
-  assert.ok(/let excluded = \[\];/.test(html), 'excluded 应为模块级变量');
   // localStorage 持久化：存/取/清除三个入口都要有
   assert.ok(/DRAFT_KEY = 'capture-draft-v1'/.test(html), '草稿 key 应为 capture-draft-v1');
   assert.ok(/function saveDraft/.test(html), '应有保存草稿函数');

@@ -4,28 +4,25 @@
  * 录入草稿的纯函数辅助层。
  *
  * 前端 desktop/renderer/index.html 是内联 JS、无构建，无法 require 本模块，
- * 所以这里把「残缺题分离」和「草稿序列化/恢复」抽成纯函数，
+ * 所以这里把「不完整题统计」和「草稿序列化/恢复」抽成纯函数，
  * 前端内联实现与之保持同等语义；单测则直接 require 这里做确定性行为断言。
  *
  * 纯函数：不碰 localStorage / DOM，可在 node:test 里确定性验证。
  */
 
 /**
- * 把识别出的题按「是否残缺」分成两组。
- * incomplete === true 的题（被页面顶部/底部/侧边裁断）进 excluded，
- * 其余进 complete（即待入库的 pending）。
+ * 统计一道题列表里 incomplete === true 的条数。
+ * 前端用它提示「有 N 道题选项可能不完整，请核对补充」，这是提醒而非排除。
  *
  * @param {Array} list 已规范化的题目数组
- * @returns {{ complete: Array, excluded: Array }}
+ * @returns {number}
  */
-function splitIncomplete(list) {
-  const complete = [];
-  const excluded = [];
+function countIncomplete(list) {
+  let n = 0;
   for (const q of list || []) {
-    if (q && q.incomplete === true) excluded.push(q);
-    else complete.push(q);
+    if (q && q.incomplete === true) n += 1;
   }
-  return { complete, excluded };
+  return n;
 }
 
 /**
@@ -36,7 +33,6 @@ function serializeDraft(state) {
   const s = state || {};
   return {
     pending: Array.isArray(s.pending) ? s.pending : [],
-    excluded: Array.isArray(s.excluded) ? s.excluded : [],
     pendingSource: typeof s.pendingSource === 'string' ? s.pendingSource : 'text',
     savedAt: s.savedAt || new Date().toISOString(),
   };
@@ -59,10 +55,9 @@ function deserializeDraft(raw) {
   if (!Array.isArray(obj.pending)) return null;
   return {
     pending: obj.pending,
-    excluded: Array.isArray(obj.excluded) ? obj.excluded : [],
     pendingSource: typeof obj.pendingSource === 'string' ? obj.pendingSource : 'text',
     savedAt: obj.savedAt || null,
   };
 }
 
-module.exports = { splitIncomplete, serializeDraft, deserializeDraft };
+module.exports = { countIncomplete, serializeDraft, deserializeDraft };
