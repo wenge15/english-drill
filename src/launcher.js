@@ -81,35 +81,75 @@ function ping() {
 }
 
 /**
- * 隐藏 Edge 的首次运行体验（"Microsoft 尊重您的隐私"向导）。
+ * 让 Edge 启动时"安静"：不弹任何向导/登录/同步提示。
  *
- * 为什么：`--no-first-run` 是 Chrome 的参数，对 Edge **定制的**首次运行体验（FRE）
- * 无效 —— 用户每次打开都弹隐私设置。官方文档给出的可靠方案是
- * HideFirstRunExperience 策略（写 HKCU 注册表，当前用户无需管理员权限）。
+ * 踩过两次坑（都是用户实际遇到的）：
+ * 1. 「Microsoft 尊重您的隐私」首次运行向导 —— `--no-first-run` 是 Chrome 的参数，
+ *    对 Edge **定制的**首次运行体验（FRE）无效。官方方案：HideFirstRunExperience 策略。
+ * 2. 「我们正在你的所有设备上同步你的浏览数据」—— Windows 上登录了 Microsoft 账户时，
+ *    Edge 会「隐式登录」（自动用系统账户登录浏览器）并提示同步。
+ *    官方方案：ImplicitSignInEnabled=0 禁用隐式登录。
  *
- * 副作用说明：这个策略是**全局**的（对用户自己的 Edge 也生效）。但它只做一件事
- * —— 隐藏"首次运行向导"，对早已完成首次运行的用户 Edge 没有任何影响。
- * 这正是用户想要的：再也不要看到那个隐私弹窗。
+ * 都是 HKCU 用户级策略，不需要管理员权限，且幂等（每次启动 /f 覆盖）。
  *
- * 幂等：每次启动都写一遍（/f 强制覆盖），即使之前写过也不报错。
+ * 副作用说明：
+ * - HideFirstRunExperience：只隐藏首次运行向导，对已用过的 Edge 无影响。
+ * - ImplicitSignInEnabled=0：禁用"自动登录"。用户自己的 Edge **仍可手动登录**，
+ *   只是不会再被系统账户自动登录。这是我们想要的（避免同步提示）。
+ * 写失败（受限环境）就静默继续 —— 不影响开窗口，还有启动参数兜底。
  */
-function hideEdgeFirstRun() {
+function applyEdgeQuietPolicies() {
+  const policies = [
+    ['HideFirstRunExperience', 1],
+    ['ImplicitSignInEnabled', 0],
+  ];
+  let allOk = true;
+  for (const [name, value] of policies) {
+    try {
+      execFileSync(
+        'reg',
+        [
+          'add',
+          'HKCU\\SOFTWARE\\Policies\\Microsoft\\Edge',
+          '/v', name,
+          '/t', 'REG_DWORD',
+          '/d', String(value),
+          '/f',
+        ],
+        { stdio: 'ignore', windowsHide: true },
+      );
+    } catch {
+      allOk = false;
+    }
+  }
+  return allOk;
+}
+
+/**
+ * 如果浏览器 profile 里残留了 Microsoft 账户登录状态，就重置它。
+ *
+ * 为什么：用户此前遇到过"正在同步你的浏览数据"弹窗（Edge 隐式登录后提示），
+ * 点「明白」后登录状态被写进 profile。即使之后禁用了隐式登录，
+ * 已登录状态仍可能在启动时提示同步。
+ *
+ * 做法：读 profile 的 Local State，若 Default 配置里带 edge_account_* 字段
+ * （说明登录过），就删掉整个 profile 目录重建。
+ *
+ * 安全性：这个 profile 只给本应用的 Edge 窗口用（--user-data-dir 独立目录），
+ * 不承载用户自己的收藏/密码等；删了只是窗口设置重置，业务数据在 data/questions.db。
+ * 删不掉（Edge 正开着占用了文件）就跳过，不阻塞启动。
+ */
+function resetProfileIfSignedIn(profileDir) {
   try {
-    execFileSync(
-      'reg',
-      [
-        'add',
-        'HKCU\\SOFTWARE\\Policies\\Microsoft\\Edge',
-        '/v', 'HideFirstRunExperience',
-        '/t', 'REG_DWORD',
-        '/d', '1',
-        '/f',
-      ],
-      { stdio: 'ignore', windowsHide: true },
-    );
+    const raw = fs.readFileSync(path.join(profileDir, 'Local State'), 'utf8');
+    const state = JSON.parse(raw);
+    const info = (state && state.profile && state.profile.info_cache && state.profile.info_cache.Default) || {};
+    const signedIn = Boolean(info.edge_account_cid || info.edge_account_oid || info.edge_account_first_name);
+    if (!signedIn) return false;
+    fs.rmSync(profileDir, { recursive: true, force: true });
+    fs.mkdirSync(profileDir, { recursive: true });
     return true;
   } catch {
-    // 写不了（某些受限环境）就静默继续 —— 不影响开窗口，只是可能仍会弹一次向导
     return false;
   }
 }
@@ -199,8 +239,12 @@ function findEdge() {
     } catch {
       /* 建不了就退回默认行为 */
     }
-    // 双保险：写官方策略 + 清掉首次启动标记文件，避免 FRE 弹窗。
-    hideEdgeFirstRun();
+    // 三重保险：写官方策略 + 清掉首次启动标记 + 启动参数，确保不弹任何提示
+    applyEdgeQuietPolicies();
+    // 若 profile 里残留了 Microsoft 账户登录状态，重置它（否则仍会提示同步）
+    if (resetProfileIfSignedIn(profileDir)) {
+      console.log('已清理浏览器配置里的登录状态（避免"同步浏览数据"提示）。');
+    }
     try {
       // Edge 检测到这个文件就会认定"安装后首次启动"，从而触发隐私向导
       fs.unlinkSync(path.join(profileDir, 'FirstLaunchAfterInstallation'));
@@ -212,7 +256,10 @@ function findEdge() {
       '--window-size=1280,900',
       '--no-first-run',
       '--no-default-browser-check',
-      '--disable-features=Translate,EdgeCollections',
+      // disable-sync：不启用账户同步，避免"正在同步你的浏览数据"提示
+      '--disable-sync',
+      // msImplicitSignin：不在启动参数层再关一次隐式登录（策略的兜底）
+      '--disable-features=Translate,EdgeCollections,msImplicitSignin',
     ];
     if (fs.existsSync(profileDir)) args.push(`--user-data-dir=${profileDir}`);
 
