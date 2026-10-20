@@ -164,6 +164,16 @@ test('提示词包含关键约束，避免模型自由发挥', () => {
   assert.ok(withAnswer.includes('答案'), '有答案场景应提示寻找印刷答案');
 });
 
+test('提示词明确要求排除被裁断的残缺题（只录完整题）', () => {
+  const p = ex.buildVisionPrompt({ answerInSource: true });
+  assert.ok(/只录入/.test(p), '必须强调只录入完整题');
+  assert.ok(/完全在画面内/.test(p), '必须强调题目要完整且在画面内');
+  assert.ok(/顶部/.test(p) && /底部/.test(p) && /侧边/.test(p), '必须点名被页面顶部/底部/侧边裁断');
+  assert.ok(/裁断/.test(p), '必须使用「裁断」表述');
+  assert.ok(/优先直接不要录入/.test(p), '必须要求优先不录入被裁断的题');
+  assert.ok(/不要放进 questions/.test(p), '必须明确不放进 questions 数组');
+});
+
 test('补全提示词带上了题干与选项', () => {
   const p = ex.buildAnalysisPrompt({ stem: 'He ____ to school.', options: { A: 'go', B: 'goes' } });
   assert.ok(p.includes('He ____ to school.'));

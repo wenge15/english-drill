@@ -182,7 +182,7 @@ test('批量删除：录入时自选题目后一键删除（用户明确要求�
   assert.ok(/sort\(\(a, b\) => b - a\)/.test(html), '应从后往前删，避免索引错位');
   // 顺序要求：先绑定批量按钮，再渲染列表（否则勾选后按钮不响应）
   const fnStart = html.indexOf('function renderReview');
-  const block = html.slice(fnStart, fnStart + 4000);
+  const block = html.slice(fnStart, fnStart + 6000);
   const bindIdx = block.indexOf("$('#delPicked').onclick");
   const renderIdx = block.indexOf('renderQList();');
   assert.ok(bindIdx !== -1 && renderIdx !== -1 && bindIdx < renderIdx, '批量删除按钮的绑定必须在 renderQList() 之前');
@@ -290,8 +290,8 @@ test('整包识别：能选 ZIP、逐张识别、可暂停、失败可重试', (
 
 test('整包识别：结果走与单张识别相同的核对入库路径', () => {
   // 不另起一套入库流程，避免两处行为不一致
-  const fn = html.slice(html.indexOf('function collectZipResults'), html.indexOf('function collectZipResults') + 900);
-  assert.ok(/pending = all/.test(fn), '应把结果放进 pending');
+  const fn = html.slice(html.indexOf('function collectZipResults'), html.indexOf('function collectZipResults') + 1400);
+  assert.ok(/pending = split\.complete/.test(fn), '应把分离后的完整题放进 pending');
   assert.ok(/renderReview/.test(fn), '应走同一个核对页');
 });
 
@@ -381,4 +381,37 @@ test('整包识别：点文件名能看图片，方便核对题目', () => {
   const vsFrom = html.indexOf('function viewerStep');
   const vs = html.slice(vsFrom, html.indexOf('async function openViewerAt', vsFrom));
   assert.ok(/% items\.length/.test(vs), '翻页应循环');
+});
+
+test('识图默认排除残缺题：分离逻辑是纯函数，核对页有提示条与恢复入口', () => {
+  // 分离逻辑抽成纯函数（完整题 vs 疑似残缺题），可单测（src/core/draft.js）
+  assert.ok(/function splitIncomplete/.test(html), '应有把残缺题分离出去的纯函数');
+  assert.ok(/incomplete === true/.test(html), '应以 incomplete===true 作为排除依据');
+  // 单张识别与整包识别都要经过分离（走同一条逻辑）
+  assert.ok(/splitIncomplete\(all\)/.test(html), '识别结果应经过 splitIncomplete 分离');
+  // 核对页要有醒目提示条与「查看并恢复」按钮
+  assert.ok(/已自动排除 \$\{excluded\.length\} 道疑似残缺题/.test(html), '应有排除残缺题的醒目提示条');
+  assert.ok(/查看并恢复/.test(html), '应有「查看并恢复」按钮');
+  assert.ok(/恢复到核对列表/.test(html), '每道被排除的题应能恢复到核对列表');
+  assert.ok(/incompleteReason/.test(html), '被排除的题应展示 incompleteReason（为什么被裁断）');
+});
+
+test('录入草稿：pending/excluded 提升到模块级，并用 localStorage 持久化', () => {
+  // 模块级变量（不再因切页面重建 screens.capture 闭包而丢失）
+  assert.ok(/let pending = \[\];/.test(html), 'pending 应为模块级变量');
+  assert.ok(/let excluded = \[\];/.test(html), 'excluded 应为模块级变量');
+  // localStorage 持久化：存/取/清除三个入口都要有
+  assert.ok(/DRAFT_KEY = 'capture-draft-v1'/.test(html), '草稿 key 应为 capture-draft-v1');
+  assert.ok(/function saveDraft/.test(html), '应有保存草稿函数');
+  assert.ok(/function loadDraft/.test(html), '应有读取草稿函数');
+  assert.ok(/function clearDraft/.test(html), '应有清除草稿函数');
+  assert.ok(/localStorage\.setItem/.test(html), '应写入 localStorage');
+  assert.ok(/localStorage\.getItem/.test(html), '应从 localStorage 读取');
+  assert.ok(/localStorage\.removeItem/.test(html), '应能清除 localStorage');
+  // 恢复草稿时明确提示用户，而不是静默
+  assert.ok(/已恢复上次未完成的录入/.test(html), '恢复草稿时应提示用户');
+  // 入库成功后清除草稿（避免下次误恢复已入库的题）
+  assert.ok(/clearDraft\(\)/.test(html), '入库成功后应清除草稿');
+  // 写入失败要静默降级（隐私模式），不能影响主流程
+  assert.ok(/catch \(e\) \{ \/\* 隐私模式/.test(html), '写入失败应 try/catch 静默降级');
 });
