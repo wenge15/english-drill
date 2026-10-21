@@ -624,6 +624,40 @@ function createRepo(dbPath) {
   }
 
   /**
+   * 撤销某题在当前轮的作答（手滑点错后返回上一题改）。
+   *
+   * 关键：连同 attempts 里最近一条一起删掉，绝不让撤销后的"脏记录"污染
+   * 错题本 / SRS 调度 / 讲评的累计错误次数（它们都从 attempts 统计）。
+   * 只影响"当前轮"，不碰历史轮次。
+   */
+  function undoAnswer(sessionId, questionId) {
+    const s = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId);
+    if (!s) return { ok: false, error: '练习会话不存在' };
+    const round = s.round;
+    const pq = db
+      .prepare('SELECT * FROM practice_questions WHERE session_id = ? AND question_id = ? AND round = ?')
+      .get(sessionId, questionId, round);
+    if (!pq) return { ok: false, error: '这道题不在当前练习中' };
+    if (pq.picked === null || pq.picked === undefined) {
+      return { ok: false, error: '这道题还没作答' };
+    }
+
+    // 删该题当前轮最近一条 attempts（倒序取最新一条）
+    db.prepare(
+      `DELETE FROM attempts WHERE id = (
+         SELECT id FROM attempts WHERE session_id = ? AND question_id = ? AND round = ?
+         ORDER BY id DESC LIMIT 1
+       )`,
+    ).run(sessionId, questionId, round);
+
+    // 重置作答状态，让它可以重选
+    db.prepare('UPDATE practice_questions SET picked = NULL, correct = NULL, status = ? WHERE id = ?')
+      .run('pending', pq.id);
+
+    return { ok: true, undone: true };
+  }
+
+  /**
    * 结束会话：算正确率 + 更新复习调度。
    * 调度按"该题在本次会话中最终是否做对"更新一次：
    *   最终做对 = 即使第一次错了，重做对了也算掌握（这一次的记忆是有效的）
@@ -1442,6 +1476,7 @@ function createRepo(dbPath) {
     startDailySession,
     sessionDetail,
     recordAnswer,
+    undoAnswer,
     finishSession,
     startRetryRound,
     sessionReplay,

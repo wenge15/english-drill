@@ -443,3 +443,27 @@ test('核对答案：自动补全解析，只补无用解析、不改答案', ()
   // 硬约束：只动 explanation，绝不动 answer（冲突仍由用户对照原卷决定）
   assert.ok(!/pending\[realIdx\]\.answer\s*=/.test(html), '核对不得改答案');
 });
+
+test('练习页「我不会」：独立按钮、记为 IDK、与选项共用同一作答路径', () => {
+  assert.ok(/id="idkBtn"/.test(html), '应有「我不会」按钮');
+  assert.ok(/我不会 \/ 不猜了/.test(html), '按钮文案应为「我不会 / 不猜了」');
+  assert.ok(/不确定就别猜/.test(html), '应有简短说明');
+  // fmtPicked：把 'IDK' 显示成人话，避免直接显示 IDK 字母
+  assert.ok(/const fmtPicked\s*=/.test(html), '应有 fmtPicked 工具函数');
+  assert.ok(/p === 'IDK' \? '我不会'/.test(html), 'fmtPicked 应把 IDK 显示为「我不会」');
+  // 选项点击与「我不会」共用 answerWith，避免两条路径行为分叉
+  assert.ok(/const answerWith = async \(picked\)/.test(html), '应有统一作答函数 answerWith');
+  assert.ok(/answerWith\(picked\)/.test(html), '选项点击应走 answerWith');
+  assert.ok(/answerWith\('IDK'\)/.test(html), '「我不会」应走 answerWith 且传 IDK');
+});
+
+test('练习页：有「上一题/下一题」，返回时撤销刚作答的那一题', () => {
+  assert.ok(/id="undoBtn"/.test(html), '应有「上一题」按钮');
+  assert.ok(/id="nextBtn"/.test(html), '应有「下一题」按钮');
+  assert.ok(/practice:undoAnswer/.test(html), '返回撤销应调用 practice:undoAnswer');
+  assert.ok(/let lastAnsweredIdx = -1/.test(html), '应有 lastAnsweredIdx 跟踪最近作答');
+  assert.ok(/lastAnsweredIdx = idx/.test(html), '作答成功后应记录 lastAnsweredIdx');
+  assert.ok(/idx === 0 \? 'disabled'/.test(html), '第一题时「上一题」应禁用');
+  assert.ok(/idx >= items\.length - 1 \? 'disabled'/.test(html), '最后一题时「下一题」应禁用');
+  assert.ok(/delete answered\[prev\.questionId\]/.test(html), '撤销后应清除前端 answered 记录');
+});

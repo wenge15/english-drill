@@ -52,7 +52,7 @@ const shortFiles = [];
  */
 const EXPECTED = {
   'bulk-delete.test.js': 11,
-  'db.test.js': 19,
+  'db.test.js': 21,
   'draft.test.js': 7,
   'extract.test.js': 28,
   'flow.test.js': 11,
@@ -67,7 +67,7 @@ const EXPECTED = {
   'srs.test.js': 15,
   'teach-chat.test.js': 22,
   'textparse.test.js': 18,
-  'ui.test.js': 33,
+  'ui.test.js': 35,
   'zip.test.js': 16,
 };
 

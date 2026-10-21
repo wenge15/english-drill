@@ -240,6 +240,8 @@ let ZIP_UPLOAD_LIMIT = 200 * 1024 * 1024;
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/** 把作答字母显示成人话：'IDK' 表示用户点了「我不会」，其余原样，空则「未作答」。 */
+const fmtPicked = (p) => (p === 'IDK' ? '我不会' : (p || '未作答'));
 
 function toast(msg, kind = '') {
   const el = document.createElement('div');
@@ -479,6 +481,7 @@ async function practiceScreen(session, resumed) {
   let items = session.items;
   let idx = 0;
   let answered = {};
+  let lastAnsweredIdx = -1; // 最近一次作答的题下标，用于「上一题」判断是否撤销
 
   // 续练时跳过已作答的题
   if (resumed) {
@@ -490,6 +493,7 @@ async function practiceScreen(session, resumed) {
   function render() {
     if (idx >= items.length) return renderFinish();
     const it = items[idx];
+    const isAnswered = answered[it.questionId] !== undefined;
     const done = Object.keys(answered).length;
     const sh = session.shuffling || {};
     // 把当前的乱序状态明示出来，避免"改了设置却没生效"的猜测
@@ -508,15 +512,39 @@ async function practiceScreen(session, resumed) {
       <div class="bar"><i style="width:${(idx / items.length) * 100}%"></i></div>
       <div class="stem">${esc(it.stem)}</div>
       <div class="opts" id="opts">
-        ${Object.entries(it.options).map(([k, v]) => `<button class="opt" data-k="${k}">
+        ${Object.entries(it.options).map(([k, v]) => `<button class="opt" data-k="${k}" ${isAnswered ? 'disabled' : ''}>
             <span class="k">${k}</span><span>${esc(v)}</span></button>`).join('')}
+      </div>
+      <div class="row" style="margin-top:12px;gap:8px;align-items:center">
+        <button class="btn ghost" id="idkBtn" style="border-color:#4a2b26;color:#e08b78" ${isAnswered ? 'disabled' : ''}>我不会 / 不猜了</button>
+        <span class="muted" style="font-size:12.5px">不确定就别猜，标记后计入错题</span>
       </div>
       <div id="feedback"></div>
       <div class="row" style="margin-top:18px;justify-content:space-between">
-        <span class="muted" style="font-size:12.5px">选完直接进入下一题，练习中不提示对错（${esc(shuffleNote)}）</span>
+        <span class="row" style="gap:8px;align-items:center">
+          <button class="btn ghost" id="undoBtn" ${idx === 0 ? 'disabled' : ''}>上一题</button>
+          <button class="btn ghost" id="nextBtn" ${idx >= items.length - 1 ? 'disabled' : ''}>下一题</button>
+          <span class="muted" style="font-size:12.5px">选完直接进入下一题，练习中不提示对错（${esc(shuffleNote)}）</span>
+        </span>
         <button class="btn ghost" id="quitBtn">结束本次</button>
       </div>
     </div>`;
+
+    // 统一的作答入口：选项点击与「我不会」都走这里，避免两条路径行为分叉。
+    const answerWith = async (picked) => {
+      answered[it.questionId] = picked;
+      const r = await INVOKE('practice:answer', { sessionId: session.id, questionId: it.questionId, picked });
+      if (!r.ok) { toast(r.error, 'err'); return; }
+      lastAnsweredIdx = idx;
+
+      // 第二次（及以上）做错 → 在题目下方直接展开讲评与对话窗口
+      const t = await INVOKE('teach:mistake', { questionId: it.questionId, sessionId: session.id });
+      if (t.ok && t.wrongCount >= 2) {
+        renderInlineTeach(it, picked, t, () => { idx += 1; render(); });
+      } else {
+        setTimeout(() => { idx += 1; render(); }, 180);
+      }
+    };
 
     $('#opts').querySelectorAll('.opt').forEach((btn) => {
       btn.onclick = async () => {
@@ -524,19 +552,35 @@ async function practiceScreen(session, resumed) {
         // 界面只记录选择，不做任何对错判断或高亮
         $('#opts').querySelectorAll('.opt').forEach((b) => { b.disabled = true; b.classList.remove('picked'); });
         btn.classList.add('picked');
-        answered[it.questionId] = picked;
-        const r = await INVOKE('practice:answer', { sessionId: session.id, questionId: it.questionId, picked });
-        if (!r.ok) { toast(r.error, 'err'); return; }
-
-        // 第二次（及以上）做错 → 在题目下方直接展开讲评与对话窗口
-        const t = await INVOKE('teach:mistake', { questionId: it.questionId, sessionId: session.id });
-        if (t.ok && t.wrongCount >= 2) {
-          renderInlineTeach(it, picked, t, () => { idx += 1; render(); });
-        } else {
-          setTimeout(() => { idx += 1; render(); }, 180);
-        }
+        answerWith(picked);
       };
     });
+    // 「我不会」= 记为错（picked='IDK'），照常进错题本/讲评，只是不做任何选项高亮
+    $('#idkBtn').onclick = () => {
+      $('#opts').querySelectorAll('.opt').forEach((b) => { b.disabled = true; b.classList.remove('picked'); });
+      answerWith('IDK');
+    };
+
+    // 上一题：退回上一题；若那一题是刚作答的则先撤销（可重选），否则仅退回查看（选项保持禁用）。
+    $('#undoBtn').onclick = async () => {
+      if (idx === 0) return;
+      const prevIdx = idx - 1;
+      const prev = items[prevIdx];
+      if (lastAnsweredIdx === prevIdx) {
+        const r = await INVOKE('practice:undoAnswer', { sessionId: session.id, questionId: prev.questionId });
+        if (!r.ok) return toast(r.error || '撤销失败', 'err');
+        delete answered[prev.questionId];
+        lastAnsweredIdx = -1;
+        toast('已撤销上一题的选择，可以重新作答', 'okc');
+      }
+      idx = prevIdx;
+      render();
+    };
+    // 下一题：退回查看后前进；未作答就点下一题视为跳过（不算作答）。
+    $('#nextBtn').onclick = () => {
+      if (idx < items.length - 1) { idx += 1; render(); }
+    };
+
     $('#quitBtn').onclick = () => renderFinish(true);
   }
 
@@ -569,7 +613,7 @@ async function practiceScreen(session, resumed) {
     const historyHtml = (t.history || []).slice(0, 6).map((h) => `
       <div class="hrow ${h.correct ? 'ok' : ''}">
         <span class="when">${esc(h.day || '')} 第${h.round}轮</span>
-        <span class="what">选了 <b class="${h.correct ? 'okc' : 'crit'}">${esc(h.picked || '未作答')}</b>${h.pickedText ? ` · ${esc(h.pickedText)}` : ''}</span>
+        <span class="what">选了 <b class="${h.correct ? 'okc' : 'crit'}">${esc(fmtPicked(h.picked))}</b>${h.pickedText ? ` · ${esc(h.pickedText)}` : ''}</span>
         <span class="mark">${h.correct ? '<span class="okc">对</span>' : '<span class="crit">错</span>'}${h.snapshotMissing ? '<span class="muted" title="那次作答没有留下选项顺序快照，文字是按当前顺序解释的">?</span>' : ''}</span>
       </div>`).join('');
 
@@ -587,7 +631,7 @@ async function practiceScreen(session, resumed) {
       <div class="teach" style="margin-top:16px">
         <h4>这道题你已经错 ${t.wrongCount} 次了</h4>
         <div style="margin-bottom:10px">
-          你这次选了 <b class="crit">${esc(picked)}</b>${pickedText ? ` · ${esc(pickedText)}` : ''}，
+          你这次选了 <b class="crit">${esc(fmtPicked(picked))}</b>${pickedText ? ` · ${esc(pickedText)}` : ''}，
           正确答案是 <b class="okc">${esc(answerLetter)}</b>${answerText ? ` · ${esc(answerText)}` : ''}
         </div>
         ${q.knowledgePoints.length
@@ -688,7 +732,7 @@ async function practiceScreen(session, resumed) {
           ...Object.entries(q.options).map(([L, v]) => `${L}. ${v}`),
           `正确答案：${q.answer}${q.answerText ? ` · ${q.answerText}` : ''}`,
           q.knowledgePoints.length ? `考点：${q.knowledgePoints.join('、')}` : '',
-          prevWrong.length ? `我错选的：${prevWrong.map((h) => h.picked).join('、')}` : '',
+          prevWrong.length ? `我错选的：${prevWrong.map((h) => fmtPicked(h.picked)).join('、')}` : '',
           `做错次数：${t.wrongCount}`,
         ].filter(Boolean).join('\n');
         copyText(lines);
@@ -721,7 +765,7 @@ function renderResultCard(main, s, replay, partial) {
   const wrongHtml = (s.wrong || []).map((w, i) => `
     <div class="find crit">
       <b>第 ${i + 1} 题 ${esc(String(w.stem).slice(0, 90))}${String(w.stem).length > 90 ? '…' : ''}</b>
-      <div class="pickedline">你选的是 <b class="crit">${esc(w.picked || '未作答')}</b>，正确答案是 <b class="okc">${esc(w.answer)}</b></div>
+      <div class="pickedline">你选的是 <b class="crit">${esc(fmtPicked(w.picked))}</b>，正确答案是 <b class="okc">${esc(w.answer)}</b></div>
       ${w.explanation ? `<div class="ex">解析：${esc(w.explanation)}</div>` : ''}
       ${(w.knowledgePoints || []).length ? `<div style="margin-top:6px">${w.knowledgePoints.map((k) => `<span class="kp weak">${esc(k)}</span>`).join('')}</div>` : ''}
       ${w.needsTeaching ? `
@@ -748,7 +792,7 @@ function renderResultCard(main, s, replay, partial) {
       <table><tbody>${rows.map((x, i) => `<tr>
         <td>第 ${i + 1} 题</td>
         <td>${esc(String(x.stem).slice(0, 46))}${String(x.stem).length > 46 ? '…' : ''}</td>
-        <td>${x.picked ? `选了 <b class="${x.correct ? 'okc' : 'crit'}">${esc(x.picked)}</b>` : '<span class="muted">未作答</span>'}</td>
+        <td>${x.picked ? `选了 <b class="${x.correct ? 'okc' : 'crit'}">${esc(fmtPicked(x.picked))}</b>` : '<span class="muted">未作答</span>'}</td>
         <td>${x.correct === null ? '' : x.correct ? '<span class="okc">对</span>' : `<span class="crit">错，应为 ${esc(x.answer)}</span>`}</td>
       </tr>`).join('')}</tbody></table>`;
   }).join('');
@@ -2710,13 +2754,13 @@ async function showTeachDock(questionId, sessionId) {
     ? t.history.slice(0, 6).map((h) => `
         <div class="hrow ${h.correct ? 'ok' : ''}">
           <span class="when">${esc(h.day || '')} 第${h.round}轮</span>
-          <span class="what">你选了 <b class="${h.correct ? 'okc' : 'crit'}">${esc(h.picked || '未作答')}</b>${h.pickedText ? ` · ${esc(h.pickedText)}` : ''}</span>
+          <span class="what">你选了 <b class="${h.correct ? 'okc' : 'crit'}">${esc(fmtPicked(h.picked))}</b>${h.pickedText ? ` · ${esc(h.pickedText)}` : ''}</span>
           <span class="mark">${h.correct ? '<span class="okc">对</span>' : '<span class="crit">错</span>'}</span>
         </div>`).join('')
     : '<div class="muted">还没有作答记录。</div>';
 
   const wrongList = t.wrongAttempts.length
-    ? t.wrongAttempts.map((w) => `「${esc(w.picked || '未作答')}${w.pickedText ? ' ' + esc(w.pickedText) : ''}」`).join('、')
+    ? t.wrongAttempts.map((w) => `「${esc(fmtPicked(w.picked))}${w.pickedText ? ' ' + esc(w.pickedText) : ''}」`).join('、')
     : '—';
 
   const modal = document.createElement('div');

@@ -463,6 +463,11 @@ function createHost(opts) {
       // 刻意不返回对错：练完才揭晓是明确的产品要求
       return { ok: true };
     },
+    'practice:undoAnswer': ({ sessionId, questionId }) => {
+      const r = repo.undoAnswer(Number(sessionId), Number(questionId));
+      if (!r) return { ok: false, error: '找不到这次作答' };
+      return r;
+    },
     'practice:finish': ({ sessionId }) => {
       const summary = repo.finishSession(sessionId);
       if (!summary) return { ok: false, error: '练习会话不存在' };

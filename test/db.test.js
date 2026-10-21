@@ -436,3 +436,90 @@ test('startRetryRound：当前重做轮做完且仍有错题，才涨到下一�
   assert.ok(!r3.resumed);
   repo.close();
 });
+
+test('「我不会」：picked=IDK 记为错，正常进错题与调度，订正后恢复', () => {
+  const repo = freshRepo();
+  repo.saveQuestion(mkQuestion(1));
+  repo.saveQuestion(mkQuestion(2));
+  const { session } = repo.startDailySession({ now: Date.now(), force: true });
+  const items = repo.sessionDetail(session.id).items;
+  const rightOf = (it) => repo.getQuestion(it.questionId).answer;
+
+  // 第1题答对，第2题点「我不会」(picked='IDK')
+  repo.recordAnswer(session.id, items[0].questionId, rightOf(items[0]));
+  const r = repo.recordAnswer(session.id, items[1].questionId, 'IDK');
+  assert.strictEqual(r.correct, false, 'IDK 应记为错');
+  assert.strictEqual(r.needsRetry, true);
+
+  // practice_questions 与 attempts 里确实记了 'IDK'（而不是某个字母）
+  const pq = repo.raw
+    .prepare('SELECT picked, correct FROM practice_questions WHERE session_id = ? AND question_id = ? AND round = 1')
+    .get(session.id, items[1].questionId);
+  assert.strictEqual(pq.picked, 'IDK');
+  assert.strictEqual(pq.correct, 0);
+  const att = repo.raw
+    .prepare('SELECT picked, correct FROM attempts WHERE session_id = ? AND question_id = ?')
+    .get(session.id, items[1].questionId);
+  assert.strictEqual(att.picked, 'IDK');
+  assert.strictEqual(att.correct, 0);
+
+  // 结算：该题算"最终没做对"，进错题/重做，调度照常（记一次 lapse）
+  const fin = repo.finishSession(session.id);
+  assert.strictEqual(fin.needsRetry, true, '有 IDK 错题时应需要重做');
+  assert.strictEqual(fin.wrong.length, 1);
+  assert.strictEqual(fin.wrong[0].questionId, items[1].questionId);
+  assert.strictEqual(fin.wrong[0].picked, 'IDK');
+  assert.strictEqual(repo.getQuestion(items[1].questionId).state.lapses, 1, 'IDK 记错应计入 lapse');
+
+  // 重做轮订正后统计恢复正常
+  repo.startRetryRound(session.id);
+  const round2 = repo.sessionDetail(session.id, Date.now(), 2).items;
+  assert.strictEqual(round2.length, 1);
+  repo.recordAnswer(session.id, round2[0].questionId, rightOf(round2[0]), { round: 2 });
+  const fin2 = repo.finishSession(session.id);
+  assert.strictEqual(fin2.needsRetry, false, '订正后不再需要重做');
+  repo.close();
+});
+
+test('undoAnswer：撤销当前轮作答，清掉 attempts 与 picked，重答后统计正常', () => {
+  const repo = freshRepo();
+  repo.saveQuestion(mkQuestion(1));
+  repo.saveQuestion(mkQuestion(2));
+  const { session } = repo.startDailySession({ now: Date.now(), force: true });
+  const items = repo.sessionDetail(session.id).items;
+  const rightOf = (it) => repo.getQuestion(it.questionId).answer;
+
+  // 第1题答对，第2题答错
+  repo.recordAnswer(session.id, items[0].questionId, rightOf(items[0]));
+  repo.recordAnswer(session.id, items[1].questionId, ['A', 'B', 'C', 'D'].find((L) => L !== rightOf(items[1])));
+
+  // 撤销第2题
+  const u = repo.undoAnswer(session.id, items[1].questionId);
+  assert.strictEqual(u.ok, true);
+  assert.strictEqual(u.undone, true);
+
+  // practice_questions.picked / correct 回到 NULL、status 回 pending
+  const pq = repo.raw
+    .prepare('SELECT picked, correct, status FROM practice_questions WHERE session_id = ? AND question_id = ? AND round = 1')
+    .get(session.id, items[1].questionId);
+  assert.strictEqual(pq.picked, null);
+  assert.strictEqual(pq.correct, null);
+  assert.strictEqual(pq.status, 'pending');
+
+  // attempts 少了一条（第2题那条答错的记录被删掉）
+  const attCount = repo.raw
+    .prepare('SELECT COUNT(*) c FROM attempts WHERE session_id = ? AND question_id = ?')
+    .get(session.id, items[1].questionId).c;
+  assert.strictEqual(attCount, 0, '撤销后该题当前轮的 attempts 应被删掉');
+
+  // 再撤销一遍 → ok:false（这道题还没作答）
+  const u2 = repo.undoAnswer(session.id, items[1].questionId);
+  assert.strictEqual(u2.ok, false);
+
+  // 重新答对 → finishSession 统计为"最终做对"，证明撤销没留脏数据
+  repo.recordAnswer(session.id, items[1].questionId, rightOf(items[1]));
+  const fin = repo.finishSession(session.id);
+  assert.strictEqual(fin.needsRetry, false, '撤销后重答对，不该留脏数据');
+  assert.strictEqual(fin.wrong.length, 0);
+  repo.close();
+});
