@@ -55,6 +55,7 @@ const EXPECTED = {
   'db.test.js': 21,
   'draft.test.js': 7,
   'extract.test.js': 28,
+  'favorite.test.js': 7,
   'flow.test.js': 11,
   'glossary.test.js': 11,
   'group-sprint.test.js': 19,
@@ -67,7 +68,7 @@ const EXPECTED = {
   'srs.test.js': 15,
   'teach-chat.test.js': 22,
   'textparse.test.js': 18,
-  'ui.test.js': 35,
+  'ui.test.js': 36,
   'zip.test.js': 16,
 };
 

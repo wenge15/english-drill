@@ -467,3 +467,25 @@ test('练习页：有「上一题/下一题」，返回时撤销刚作答的那�
   assert.ok(/idx >= items\.length - 1 \? 'disabled'/.test(html), '最后一题时「下一题」应禁用');
   assert.ok(/delete answered\[prev\.questionId\]/.test(html), '撤销后应清除前端 answered 记录');
 });
+
+test('收藏与今日手选：练习页可收藏，题库页可筛选并加入今日练习', () => {
+  // 练习页的收藏按钮（只是打标记，不能泄露答案）
+  assert.ok(/id="favBtn"/.test(html), '练习页应有收藏按钮');
+  assert.ok(/\$\{it\.favorite \? '★ 已收藏' : '☆ 收藏'\}/.test(html), '收藏状态应可见');
+  assert.ok(/questions:setFavorite/.test(html), '应调用 setFavorite');
+  // 收藏按钮不能参与作答/揭晓逻辑
+  const favBlock = html.slice(html.indexOf('#favBtn'), html.indexOf('#favBtn') + 700);
+  assert.ok(!/correct|answer/.test(favBlock), '收藏按钮不应涉及对错或答案');
+
+  // 题库页：只看收藏 + 加入今日练习
+  assert.ok(/id="favFilter"/.test(html), '题库页应有「只看收藏」筛选');
+  assert.ok(/favoriteOnly/.test(html), '筛选应传 favoriteOnly');
+  assert.ok(/id="pickToday"/.test(html), '题库页应有「加入今日练习」按钮');
+  assert.ok(/practice:pickForToday/.test(html), '应调用 pickForToday');
+  assert.ok(/practice:todayPicks/.test(html), '应能读取今日手选状态');
+  assert.ok(/今日手选 \$\{r\.total\} 道/.test(html), '今日页应提示手选数量');
+
+  // 去重：后端用主键/单列保证，前端列表按 id 去重渲染
+  assert.ok(/daily_picks/.test(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'core', 'db.js'), 'utf8')),
+    'daily_picks 表应存在（主键去重）');
+});

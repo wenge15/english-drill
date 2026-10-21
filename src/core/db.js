@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS questions (
   streak INTEGER DEFAULT 0,
   last_review_at INTEGER,
   due_at INTEGER,
-  interval_days INTEGER DEFAULT 0
+  interval_days INTEGER DEFAULT 0,
+  favorite INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_q_due ON questions(due_at);
 CREATE INDEX IF NOT EXISTS idx_q_hash ON questions(stem_hash);
@@ -122,6 +123,15 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- 今日手选：用户指定"这题今天要练"。
+-- question_id 主键天然去重（同一题反复勾选只留一条）；纳入当天练习后即被消费删除。
+CREATE TABLE IF NOT EXISTS daily_picks (
+  question_id INTEGER PRIMARY KEY,
+  day TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dp_day ON daily_picks(day);
+
 -- 问答会话：用户可以就某道题提问，也可以泛问语法问题
 CREATE TABLE IF NOT EXISTS chat_threads (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,6 +188,9 @@ function createRepo(dbPath) {
     const qCols = db.prepare('PRAGMA table_info(questions)').all().map((c) => c.name);
     if (!qCols.includes('group_id')) {
       db.exec('ALTER TABLE questions ADD COLUMN group_id INTEGER');
+    }
+    if (!qCols.includes('favorite')) {
+      db.exec('ALTER TABLE questions ADD COLUMN favorite INTEGER DEFAULT 0');
     }
     // 索引在补列之后建：老库原本没有 group_id 列，先建索引会报错
     db.exec('CREATE INDEX IF NOT EXISTS idx_q_group ON questions(group_id)');
@@ -288,6 +301,7 @@ function createRepo(dbPath) {
     imagePath: r.image_path || '',
     answerInSource: Boolean(r.answer_in_source),
     groupId: r.group_id ?? null,
+    favorite: Boolean(r.favorite),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     archived: Boolean(r.archived),
@@ -388,6 +402,9 @@ function createRepo(dbPath) {
       clauses.push('due_at <= ?');
       args.push(filter.now ?? Date.now());
     }
+    if (filter.favoriteOnly) {
+      clauses.push('favorite = 1');
+    }
     args.push(filter.limit ?? 500);
     // 排序键必须带 id：批量导入的题目 created_at 常常在同一毫秒，
     // 只按 created_at 排序时 SQLite 的顺序不确定（同值排序不稳定），
@@ -402,6 +419,52 @@ function createRepo(dbPath) {
 
   function archiveQuestion(id, archived = true) {
     db.prepare('UPDATE questions SET archived = ?, updated_at = ? WHERE id = ?').run(archived ? 1 : 0, Date.now(), id);
+  }
+
+  /** 收藏/取消收藏。同一题只有一条 questions 记录，收藏只是打标记，天然去重。 */
+  function setFavorite(questionId, favorite = true) {
+    const q = db.prepare('SELECT id FROM questions WHERE id = ?').get(questionId);
+    if (!q) return { ok: false, error: '题目不存在' };
+    const f = favorite ? 1 : 0;
+    db.prepare('UPDATE questions SET favorite = ?, updated_at = ? WHERE id = ?').run(f, Date.now(), questionId);
+    return { ok: true, favorite: Boolean(f) };
+  }
+
+  /** 把一批题加进「今日手选」。question_id 主键去重，重复勾选只留一条。 */
+  function pickForToday(questionIds, now = Date.now()) {
+    const day = localDay(now);
+    const ids = (questionIds || []).map(Number).filter((n) => Number.isFinite(n));
+    const stmt = db.prepare('INSERT OR REPLACE INTO daily_picks(question_id, day, created_at) VALUES(?,?,?)');
+    let picked = 0;
+    for (const id of new Set(ids)) {
+      if (!db.prepare('SELECT id FROM questions WHERE id = ?').get(id)) continue;
+      stmt.run(id, day, now);
+      picked += 1;
+    }
+    return { ok: true, picked };
+  }
+
+  /** 取消今日手选。 */
+  function unpickForToday(questionIds) {
+    const ids = (questionIds || []).map(Number).filter((n) => Number.isFinite(n));
+    if (ids.length === 0) return { ok: true, removed: 0 };
+    const marks = ids.map(() => '?').join(',');
+    const info = db.prepare(`DELETE FROM daily_picks WHERE question_id IN (${marks})`).run(...ids);
+    return { ok: true, removed: Number(info.changes) };
+  }
+
+  /** 今日手选列表（含题目摘要与收藏状态，供今日页提示）。 */
+  function todayPicks(now = Date.now()) {
+    const day = localDay(now);
+    const rows = db
+      .prepare(`SELECT dp.question_id, q.stem, q.favorite, q.archived
+        FROM daily_picks dp LEFT JOIN questions q ON q.id = dp.question_id
+        WHERE dp.day = ? ORDER BY dp.created_at, dp.question_id`)
+      .all(day);
+    const items = rows
+      .filter((r) => r.question_id !== null && r.stem !== null && !r.archived)
+      .map((r) => ({ id: r.question_id, stem: r.stem, favorite: Boolean(r.favorite) }));
+    return { items, total: items.length, day };
   }
 
   /** 批量归档 / 恢复。归档是可恢复的，所以这是默认的"删除"方式。 */
@@ -518,14 +581,44 @@ function createRepo(dbPath) {
       shuffleOrder,
       rng: opts.rng,
     });
-    if (queue.length === 0) return { session: null, resumed: false, empty: true };
+
+    // 今日手选题排到队列**最前面**。
+    //
+    // 踩过的坑（验收时发现）：早期实现是"已在正常队列里就跳过"，
+    // 结果手选题只是留在它原本的 SRS 位置上，根本没有优先——
+    // 用户勾了"今天要练"却发现还是排在第 30 题。
+    // 正确做法：先把手选题从正常队列里**摘掉**，再整体前置，这样它一定在最前。
+    // 归档/已删除的题跳过。纳入后即消费，删除今天的 picks。
+    const maxTotal = getSetting('maxTotal');
+    const pickIds = db
+      .prepare('SELECT question_id FROM daily_picks WHERE day = ? ORDER BY created_at, question_id')
+      .all(day)
+      .map((r) => r.question_id);
+    // pickIds 来自 daily_picks 主键表，本身不会重复，直接取题即可。
+    const pickIdSet = new Set(pickIds);
+    const pickedQueue = [];
+    for (const pid of pickIds) {
+      const q = getQuestion(pid);
+      if (!q || q.archived) continue;
+      pickedQueue.push(q);
+    }
+    // 正常队列里把手选题摘掉，避免同一题出现两次。
+    const restQueue = queue.filter((q) => !pickIdSet.has(q.id));
+    // 手选题全部纳入（优先），正常队列按剩余名额截断。
+    const remaining = Math.max(0, maxTotal - pickedQueue.length);
+    const finalQueue = [...pickedQueue, ...restQueue.slice(0, remaining)];
+    if (pickedQueue.length > 0) {
+      db.prepare('DELETE FROM daily_picks WHERE day = ?').run(day);
+    }
+
+    if (finalQueue.length === 0) return { session: null, resumed: false, empty: true };
 
     const info = db.prepare('INSERT INTO sessions(day, started_at, phase, round, total) VALUES(?,?,?,?,?)')
-      .run(day, now, 'answering', 1, queue.length);
+      .run(day, now, 'answering', 1, finalQueue.length);
     const sessionId = Number(info.lastInsertRowid);
 
     const insert = db.prepare('INSERT INTO practice_questions(session_id, question_id, position, round) VALUES(?,?,?,?)');
-    queue.forEach((q, i) => {
+    finalQueue.forEach((q, i) => {
       insert.run(sessionId, q.id, i, 1);
       if (shuffleOptions) presentationOf(sessionId, q.id, 1, q);
     });
@@ -542,7 +635,8 @@ function createRepo(dbPath) {
       .prepare(`SELECT pq.question_id, pq.position, pq.round, pq.picked, pq.correct, pq.status, pq.scheduled,
                 q.stem, q.options, q.answer, q.explanation, q.knowledge_points, q.difficulty,
                 q.stability, q.difficulty_score, q.reps, q.lapses, q.streak, q.last_review_at, q.due_at,
-                q.interval_days, q.archived, q.source_note, q.image_path, q.answer_in_source, q.created_at, q.updated_at
+                q.interval_days, q.archived, q.source_note, q.image_path, q.answer_in_source, q.created_at, q.updated_at,
+                q.favorite
         FROM practice_questions pq JOIN questions q ON q.id = pq.question_id
         WHERE pq.session_id = ?${onlyRound ? ' AND pq.round = ?' : ''}
         ORDER BY pq.round, pq.position`)
@@ -567,6 +661,7 @@ function createRepo(dbPath) {
         correct: revealed ? Boolean(r.correct) : null,
         answer: revealed ? view.answer : null,
         explanation: revealed ? q.explanation : '',
+        favorite: Boolean(r.favorite),
         mastery: srs.mastery(q.state, now),
         schedule: srs.describeSchedule(q.state, now),
       };
@@ -1348,6 +1443,7 @@ function createRepo(dbPath) {
     'chat_threads',
     'attempts',
     'practice_questions',
+    'daily_picks',
     'sessions',
     'questions',
     'groups',
@@ -1379,6 +1475,7 @@ function createRepo(dbPath) {
         groups: '分组',
         sessions: '练习场次',
         practice_questions: '练习明细',
+        daily_picks: '今日手选',
         attempts: '作答记录',
         chat_threads: '问答会话',
         chat_messages: '问答消息',
@@ -1467,6 +1564,10 @@ function createRepo(dbPath) {
     updateQuestion,
     listQuestions,
     getQuestion,
+    setFavorite,
+    pickForToday,
+    unpickForToday,
+    todayPicks,
     archiveQuestion,
     archiveQuestions,
     deleteQuestions,

@@ -326,6 +326,7 @@ screens.today = async () => {
         <button class="btn" id="startBtn">开始练习</button>
         <button class="btn ghost" id="seedBtn">试用：导入 6 道示例题</button>
       </div>
+      <div id="todayPicksNote"></div>
       <div id="pendingRetry"></div>
     </div>
     <div class="card"><h2>未来 7 天复习量</h2><div id="forecast" class="muted">—</div></div>
@@ -448,6 +449,19 @@ screens.today = async () => {
     go('practice', r.session, r.resumed);
   };
 
+  // 今日手选提示：用户在图库勾选「加入今日练习」的题会排在练习最前面。
+  // 这里异步显示数量，让用户知道手选已生效（否则勾完没有任何反馈，容易以为没成功）。
+  const checkTodayPicks = async () => {
+    const box = $('#todayPicksNote');
+    if (!box) return;
+    const r = await INVOKE('practice:todayPicks');
+    if (!r.ok || !r.total) { box.innerHTML = ''; return; }
+    box.innerHTML = `<div class="hintbox" style="margin-top:12px">
+      <b>今日手选 ${r.total} 道</b>：开始练习时会<b>排在最前面</b>。
+      <span class="muted">（可在「题库管理」里勾选更多，或取消勾选）</span>
+    </div>`;
+  };
+
   // 「继续重做上次的错题」：结果页只在练习结束那一刻显示入口，关掉窗口后用户回不去。
   // 所以今日页异步查一次（不阻塞首屏），有未订正错题就给一个醒目入口。
   const checkPendingRetry = async () => {
@@ -472,6 +486,7 @@ screens.today = async () => {
 
   refresh();
   refreshSprint();
+  checkTodayPicks();
   checkPendingRetry();
 };
 
@@ -518,6 +533,7 @@ async function practiceScreen(session, resumed) {
       <div class="row" style="margin-top:12px;gap:8px;align-items:center">
         <button class="btn ghost" id="idkBtn" style="border-color:#4a2b26;color:#e08b78" ${isAnswered ? 'disabled' : ''}>我不会 / 不猜了</button>
         <span class="muted" style="font-size:12.5px">不确定就别猜，标记后计入错题</span>
+        <button class="btn ghost" id="favBtn" style="margin-left:auto;font-size:12.5px">${it.favorite ? '★ 已收藏' : '☆ 收藏'}</button>
       </div>
       <div id="feedback"></div>
       <div class="row" style="margin-top:18px;justify-content:space-between">
@@ -559,6 +575,15 @@ async function practiceScreen(session, resumed) {
     $('#idkBtn').onclick = () => {
       $('#opts').querySelectorAll('.opt').forEach((b) => { b.disabled = true; b.classList.remove('picked'); });
       answerWith('IDK');
+    };
+    // 收藏：只是打标记，不泄露答案、不影响作答流程
+    $('#favBtn').onclick = async () => {
+      const next = !it.favorite;
+      const r = await INVOKE('questions:setFavorite', { questionId: it.questionId, favorite: next });
+      if (!r.ok) return toast(r.error, 'err');
+      it.favorite = r.favorite;
+      $('#favBtn').textContent = r.favorite ? '★ 已收藏' : '☆ 收藏';
+      toast(r.favorite ? '已收藏' : '已取消收藏', 'okc');
     };
 
     // 上一题：退回上一题；若那一题是刚作答的则先撤销（可重选），否则仅退回查看（选项保持禁用）。
@@ -2321,11 +2346,14 @@ screens.library = async () => {
   const main = $('#main');
   let filter = '';
   let groupFilter = '';
+  let favOnly = false;
+  let todayPickIds = new Set();
   main.innerHTML = `<h1>题库管理</h1><div class="sub" id="libSub"></div>
     <div class="card">
       <div class="row">
         <input type="text" id="search" placeholder="搜索题干或选项…" style="flex:1;min-width:200px" />
         <select id="groupFilter" style="flex:0 0 190px"><option value="">全部分组</option></select>
+        <button class="btn ghost" id="favFilter">☆ 只看收藏</button>
         <button class="btn ghost" id="reload">刷新</button>
         <button class="btn" id="autoTag">给没标注的题自动补知识点</button>
       </div>
@@ -2341,6 +2369,7 @@ screens.library = async () => {
         <select id="batchGroupPick" style="flex:0 0 200px"></select>
         <button class="btn" id="applyGroup">归入所选分组</button>
         <button class="btn ghost" id="clearGroup">移出分组</button>
+        <button class="btn" id="pickToday">加入今日练习</button>
       </div>
       <div class="row" style="margin-top:10px">
         <button class="btn danger" id="archivePicked">删除选中的题</button>
@@ -2358,26 +2387,38 @@ screens.library = async () => {
     $('#batchGroupPick').innerHTML = `<option value="">选择目标分组…</option>${opts}`;
   };
 
+  // 拉今日手选，用于给已加入的题打「今日」小标签
+  const loadTodayPicks = async () => {
+    const r = await INVOKE('practice:todayPicks');
+    todayPickIds = new Set(r.ok ? (r.items || []).map((it) => it.id) : []);
+  };
+
   async function load() {
-    const payload = { search: filter, limit: 500 };
+    const payload = { search: filter, limit: 500, favoriteOnly: favOnly };
     if (groupFilter === '__none__') payload.groupId = null;
     else if (groupFilter) payload.groupId = Number(groupFilter);
     const r = await INVOKE('questions:list', payload);
     if (!r.ok) return toast(r.error, 'err');
-    $('#libSub').textContent = `共 ${r.questions.length} 道（最多显示 500 道）`;
+    $('#libSub').textContent = `共 ${r.questions.length} 道（最多显示 500 道）${favOnly ? '｜只看收藏' : ''}`;
     if (!r.questions.length) {
       $('#libList').innerHTML = '<div class="empty">没有符合条件的题目。</div>';
       $('#batchCard').style.display = 'none';
       return;
     }
-    $('#libList').innerHTML = r.questions.map((q) => `
+    $('#libList').innerHTML = r.questions.map((q) => {
+      const isToday = todayPickIds.has(q.id);
+      return `
       <div class="qitem">
         <div class="row" style="justify-content:space-between;align-items:flex-start">
           <div class="st" style="flex:1">${esc(q.stem)}</div>
-          <label class="row" style="gap:5px;flex:0 0 auto;color:var(--muted);font-size:12px">
-            <input type="checkbox" class="qpick" value="${q.id}" style="width:auto" /> 选中
-          </label>
-          <button class="btn danger" data-delq="${q.id}" style="padding:2px 9px;font-size:11.5px;flex:0 0 auto">删除</button>
+          <span class="row" style="gap:6px;flex:0 0 auto;align-items:center">
+            <button class="btn ghost" data-fav="${q.id}" style="padding:2px 9px;font-size:12px" title="收藏/取消收藏">${q.favorite ? '★ 已收藏' : '☆ 收藏'}</button>
+            ${isToday ? '<span class="chip" style="background:#2a4a3a;color:#7fdcb0">今日</span>' : ''}
+            <label class="row" style="gap:5px;color:var(--muted);font-size:12px">
+              <input type="checkbox" class="qpick" value="${q.id}" style="width:auto" /> 选中
+            </label>
+            <button class="btn danger" data-delq="${q.id}" style="padding:2px 9px;font-size:11.5px">删除</button>
+          </span>
         </div>
         <div class="row" style="gap:14px;flex-wrap:wrap">
           ${Object.entries(q.options).map(([k, v]) => `<span class="muted" style="font-size:12.5px">${k}. ${esc(v)}</span>`).join('')}
@@ -2389,7 +2430,8 @@ screens.library = async () => {
           ｜${esc(srsText(q))}
         </div>
         ${q.explanation ? `<div class="meta" style="margin-top:4px">解析：${esc(q.explanation)}</div>` : ''}
-      </div>`).join('');
+      </div>`;
+    }).join('');
     updateSel();
   }
 
@@ -2400,15 +2442,25 @@ screens.library = async () => {
     $('#selInfo').textContent = n > 0 ? `已选中 ${n} 道题` : '';
   }
   $('#libList').addEventListener('change', (e) => { if (e.target.classList.contains('qpick')) updateSel(); });
-  // 单题删除：走同一套"移入回收站"逻辑，避免两种删除语义不一致
+  // 单题操作（删除 / 收藏切换）：走同一套委托，避免两种删除语义不一致
   $('#libList').addEventListener('click', async (e) => {
-    const btn = e.target.closest('[data-delq]');
-    if (!btn) return;
-    const id = Number(btn.dataset.delq);
-    if (!confirm('把这道题移入回收站？\n\n它会从题库和练习中消失，但数据仍在，可在「回收站」恢复。')) return;
-    const r = await INVOKE('questions:bulkDelete', { ids: [id], mode: 'archive' });
-    toast(r.ok ? r.message : r.error, r.ok ? 'okc' : 'err');
-    if (r.ok) { await loadGroups(); load(); }
+    const delBtn = e.target.closest('[data-delq]');
+    if (delBtn) {
+      const id = Number(delBtn.dataset.delq);
+      if (!confirm('把这道题移入回收站？\n\n它会从题库和练习中消失，但数据仍在，可在「回收站」恢复。')) return;
+      const r = await INVOKE('questions:bulkDelete', { ids: [id], mode: 'archive' });
+      toast(r.ok ? r.message : r.error, r.ok ? 'okc' : 'err');
+      if (r.ok) { await loadGroups(); load(); }
+      return;
+    }
+    const favBtn = e.target.closest('[data-fav]');
+    if (favBtn) {
+      const id = Number(favBtn.dataset.fav);
+      const r = await INVOKE('questions:setFavorite', { questionId: id, favorite: !favBtn.textContent.includes('已收藏') });
+      if (!r.ok) return toast(r.error, 'err');
+      favBtn.textContent = r.favorite ? '★ 已收藏' : '☆ 收藏';
+      toast(r.favorite ? '已收藏' : '已取消收藏', 'okc');
+    }
   });
 
   $('#applyGroup').onclick = async () => {
@@ -2460,6 +2512,20 @@ screens.library = async () => {
 
   $('#search').oninput = (e) => { filter = e.target.value.trim(); clearTimeout(window.__t); window.__t = setTimeout(load, 250); };
   $('#groupFilter').onchange = (e) => { groupFilter = e.target.value; load(); };
+  $('#favFilter').onclick = () => {
+    favOnly = !favOnly;
+    $('#favFilter').textContent = favOnly ? '★ 只看收藏（开）' : '☆ 只看收藏';
+    load();
+  };
+  $('#pickToday').onclick = async () => {
+    const ids = picked();
+    if (!ids.length) return toast('先勾选题目', 'err');
+    const r = await INVOKE('practice:pickForToday', { questionIds: ids });
+    if (!r.ok) return toast(r.error, 'err');
+    toast(`已把 ${r.picked} 道题加入今日练习（会排在练习最前面）`, 'okc');
+    await loadTodayPicks();
+    load();
+  };
   $('#reload').onclick = load;
   $('#autoTag').onclick = async () => {
     $('#autoTag').disabled = true;
@@ -2473,6 +2539,7 @@ screens.library = async () => {
     load();
   };
   await loadGroups();
+  await loadTodayPicks();
   load();
 };
 

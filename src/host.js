@@ -177,6 +177,10 @@ function createHost(opts) {
       };
     },
     'questions:update': ({ id, patch }) => ({ ok: true, question: repo.updateQuestion(id, patch) }),
+    'questions:setFavorite': ({ questionId, favorite = true }) => {
+      const r = repo.setFavorite(Number(questionId), Boolean(favorite));
+      return r.ok ? { ok: true, favorite: r.favorite } : { ok: false, error: r.error };
+    },
     'questions:archive': ({ id, archived = true }) => {
       repo.archiveQuestion(id, archived);
       return { ok: true };
@@ -467,6 +471,18 @@ function createHost(opts) {
       const r = repo.undoAnswer(Number(sessionId), Number(questionId));
       if (!r) return { ok: false, error: '找不到这次作答' };
       return r;
+    },
+    'practice:pickForToday': ({ questionIds }) => {
+      const r = repo.pickForToday(questionIds);
+      return { ok: true, picked: r.picked };
+    },
+    'practice:unpickForToday': ({ questionIds }) => {
+      const r = repo.unpickForToday(questionIds);
+      return { ok: true, removed: r.removed };
+    },
+    'practice:todayPicks': () => {
+      const r = repo.todayPicks();
+      return { ok: true, items: r.items, total: r.total };
     },
     'practice:finish': ({ sessionId }) => {
       const summary = repo.finishSession(sessionId);
