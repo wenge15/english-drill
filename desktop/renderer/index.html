@@ -470,7 +470,8 @@ screens.today = async () => {
     const r = await INVOKE('practice:pendingRetry');
     if (!r.ok || !r.retry) { box.innerHTML = ''; return; }
     const retry = r.retry;
-    box.innerHTML = `<button class="btn" id="resumeRetryBtn" style="margin-top:12px;background:var(--warn);color:#2a1c00">继续重做上次的错题（${retry.wrongCount} 道）</button>`;
+    // 文案强调"所有未订正的"：错题是跨天汇总的，不是只有上次那一场
+    box.innerHTML = `<button class="btn" id="resumeRetryBtn" style="margin-top:12px;background:var(--warn);color:#2a1c00">继续重做所有未订正的错题（${retry.wrongCount} 道）</button>`;
     $('#resumeRetryBtn').onclick = async () => {
       const rr = await INVOKE('practice:retry', { sessionId: retry.sessionId });
       if (!rr.ok) return toast(rr.error, 'err');
@@ -654,7 +655,10 @@ async function practiceScreen(session, resumed) {
 
     feedback.innerHTML = `
       <div class="teach" style="margin-top:16px">
-        <h4>这道题你已经错 ${t.wrongCount} 次了</h4>
+        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h4 style="margin:0">这道题你已经错 ${t.wrongCount} 次了</h4>
+          <button class="btn ghost" id="nextQTop">懂了，继续下一题 →</button>
+        </div>
         <div style="margin-bottom:10px">
           你这次选了 <b class="crit">${esc(fmtPicked(picked))}</b>${pickedText ? ` · ${esc(pickedText)}` : ''}，
           正确答案是 <b class="okc">${esc(answerLetter)}</b>${answerText ? ` · ${esc(answerText)}` : ''}
@@ -678,7 +682,21 @@ async function practiceScreen(session, resumed) {
         <div id="inlineChat"></div>
       </div>`;
 
+    // 讲评面板出现在选项下方，用户很容易"看不见继续按钮、以为点不动"。
+    // 所以：① 顶部也放一个继续按钮；② 自动把讲评面板滚进视野。
     $('#nextQ').onclick = onNext;
+    $('#nextQTop').onclick = onNext;
+    try {
+      // 等一帧让面板完成布局再滚动，否则位置算不准
+      requestAnimationFrame(() => {
+        const panel = feedback.querySelector('.teach');
+        if (panel && typeof panel.scrollIntoView === 'function') {
+          panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+    } catch {
+      /* 滚动失败不影响作答 */
+    }
     $('#askHere').onclick = () => {
       // 就地展开对话输入区（不遮挡题目，就在下面）
       const box = $('#inlineChat');

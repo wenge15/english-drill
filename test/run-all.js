@@ -63,6 +63,7 @@ const EXPECTED = {
   'knowledge.test.js': 28,
   'model.test.js': 28,
   'reset.test.js': 11,
+  'retry-all.test.js': 3,
   'safety.test.js': 7,
   'shuffle.test.js': 12,
   'srs.test.js': 15,

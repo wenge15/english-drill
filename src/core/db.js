@@ -917,12 +917,21 @@ function createRepo(dbPath) {
       }
     }
 
-    // 找出"在任一已完成的轮次里最终仍未做对"的题
+    // 找出**所有会话里**最终仍未做对的题（跨会话汇总、去重）。
+    //
+    // 用户明确要求：昨天的错题今天也要一起重做。
+    // 早期实现只看当前会话（WHERE session_id = ?），于是"10-20 剩 7 道没订正、
+    // 10-21 又产生 9 道"时，昨天的 7 道永远不会被重做——用户以为它们消失了。
+    // 现在按题跨会话聚合：只要该题在所有轮次里都没做对过（MAX(correct)=0），
+    // 就纳入本轮重做；一旦任何一轮做对了就不再出现。归档题排除。
     const rows = db
-      .prepare(`SELECT question_id FROM practice_questions
-        WHERE session_id = ? GROUP BY question_id
-        HAVING MAX(correct) = 0 ORDER BY MIN(position)`)
-      .all(sessionId);
+      .prepare(`SELECT pq.question_id FROM practice_questions pq
+          JOIN questions q ON q.id = pq.question_id
+         WHERE q.archived = 0
+         GROUP BY pq.question_id
+        HAVING MAX(pq.correct) = 0
+         ORDER BY MIN(pq.position)`)
+      .all();
 
     if (rows.length === 0) {
       db.prepare('UPDATE sessions SET phase = ? WHERE id = ?').run('done', sessionId);
@@ -1004,6 +1013,16 @@ function createRepo(dbPath) {
    * SQLite 的 MAX 聚合会忽略 NULL：某题一轮做错(0)、下一轮还没答(NULL)时 MAX=0，
    * 仍算未订正；所有轮次都 NULL（从没答过）时 MAX=NULL，不算错题。
    */
+  /**
+   * 找「还有未订正错题的最近会话」，供今日页提供"继续重做"入口。
+   *
+   * 关键：错题必须**跨会话汇总**。
+   * 真实问题（用户反馈）：10-20 的会话剩下 7 道没订正，10-21 又产生 9 道，
+   * 而入口只指向最近的会话 —— 昨天那 7 道就永远"消失"了，用户以为不用再管。
+   * 现在 wrongCount 统计的是**所有会话里仍未订正（该题所有轮次 MAX(correct)=0）**
+   * 的题目去重数量；sessionId 只是选一个"容器会话"来承载这轮重做。
+   * 归档题不计入。
+   */
   function pendingRetrySession() {
     const row = db
       .prepare(
@@ -1020,14 +1039,17 @@ function createRepo(dbPath) {
     const s = db.prepare('SELECT id, day, round FROM sessions WHERE id = ?').get(row.id);
     if (!s) return null;
 
+    // 跨会话汇总（去重）后仍未订正的题数
     const wrongCount = db
       .prepare(
         `SELECT COUNT(*) AS c FROM (
-           SELECT question_id FROM practice_questions WHERE session_id = ?
-           GROUP BY question_id HAVING MAX(correct) = 0
+           SELECT pq.question_id FROM practice_questions pq
+             JOIN questions q ON q.id = pq.question_id
+            WHERE q.archived = 0
+            GROUP BY pq.question_id HAVING MAX(pq.correct) = 0
          )`,
       )
-      .get(row.id).c;
+      .get().c;
 
     return { sessionId: s.id, day: s.day, round: s.round, wrongCount: Number(wrongCount) };
   }
