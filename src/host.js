@@ -450,7 +450,7 @@ function createHost(opts) {
 
     // ---------- 练习 ----------
     'practice:start': (payload = {}) => {
-      const r = repo.startDailySession({ force: payload.force });
+      const r = repo.startDailySession({ force: payload.force, mode: payload.mode });
       if (r.empty) {
         return {
           ok: true,
@@ -461,6 +461,7 @@ function createHost(opts) {
       }
       return { ok: true, resumed: r.resumed, session: repo.sessionDetail(r.session.id) };
     },
+    'practice:modeCounts': () => ({ ok: true, counts: repo.modeCounts() }),
     'practice:answer': ({ sessionId, questionId, picked }) => {
       const r = repo.recordAnswer(sessionId, questionId, picked);
       if (!r) return { ok: false, error: '这一题不在当前练习中，可能已被重做覆盖' };

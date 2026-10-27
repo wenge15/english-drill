@@ -323,7 +323,9 @@ screens.today = async () => {
     <div class="card" style="margin-top:18px"><h2>开始今天的练习</h2>
       <p class="muted" style="margin:0 0 14px">练习过程中不会告诉你对错，全部做完后才公布正确率，并带你重做错题。</p>
       <div class="row">
-        <button class="btn" id="startBtn">开始练习</button>
+        <button class="btn" id="startNew">练习新题（…道）</button>
+        <button class="btn" id="startReview">复习（…道）</button>
+        <button class="btn" id="startWrong">错题模式（…道）</button>
         <button class="btn ghost" id="seedBtn">试用：导入 6 道示例题</button>
       </div>
       <div id="todayPicksNote"></div>
@@ -432,22 +434,42 @@ screens.today = async () => {
           <span style="font-size:13px">${f.count} 题</span></div>`;
       }).join('');
     }
-    const counts = await INVOKE('questions:counts');
-    $('#startBtn').disabled = counts.ok && counts.counts.total === 0;
-    if ($('#startBtn').disabled) $('#startBtn').textContent = '题库为空，请先录入题目';
+  };
+
+  // 三个模式按钮的文案与置灰由 practice:modeCounts 驱动（异步查，不阻塞首屏）。
+  const modeLabels = { new: '练习新题', review: '复习', wrong: '错题模式' };
+  const checkModeCounts = async () => {
+    const r = await INVOKE('practice:modeCounts');
+    if (!r.ok) return;
+    const c = r.counts;
+    const setBtn = (id, key) => {
+      const el = $(id);
+      if (!el) return;
+      const m = c[key];
+      el.disabled = m.available === 0;
+      el.textContent = `${modeLabels[key]}（${m.available} 道${key === 'review' ? `，其中待复习 ${m.due} 道` : ''}）`;
+    };
+    setBtn('#startNew', 'new');
+    setBtn('#startReview', 'review');
+    setBtn('#startWrong', 'wrong');
+  };
+
+  const startMode = async (mode) => {
+    const r = await INVOKE('practice:start', { mode });
+    if (!r.ok) return toast(r.error, 'err');
+    if (r.empty) return toast(r.message, 'err');
+    go('practice', r.session, r.resumed);
   };
 
   $('#seedBtn').onclick = async () => {
     const r = await INVOKE('demo:seed');
     toast(r.ok ? `已导入示例题：新增 ${r.created} 道` : r.error, r.ok ? 'okc' : 'err');
     refresh();
+    checkModeCounts();
   };
-  $('#startBtn').onclick = async () => {
-    const r = await INVOKE('practice:start', {});
-    if (!r.ok) return toast(r.error, 'err');
-    if (r.empty) return toast(r.message, 'err');
-    go('practice', r.session, r.resumed);
-  };
+  $('#startNew').onclick = () => startMode('new');
+  $('#startReview').onclick = () => startMode('review');
+  $('#startWrong').onclick = () => startMode('wrong');
 
   // 今日手选提示：用户在图库勾选「加入今日练习」的题会排在练习最前面。
   // 这里异步显示数量，让用户知道手选已生效（否则勾完没有任何反馈，容易以为没成功）。
@@ -487,6 +509,7 @@ screens.today = async () => {
 
   refresh();
   refreshSprint();
+  checkModeCounts();
   checkTodayPicks();
   checkPendingRetry();
 };
@@ -517,11 +540,12 @@ async function practiceScreen(session, resumed) {
       sh.order ? '题目乱序' : '题目按录入顺序',
       sh.options ? '选项乱序' : '选项固定',
     ].join('｜');
+    const modeLabel = { new: '练习新题', review: '复习', wrong: '错题模式' }[session.mode] || '';
     main.innerHTML = `<div class="practice">
       <div class="ptop">
         <span class="row" style="gap:8px">
           <b class="qno">第 ${idx + 1} 题</b>
-          <span class="muted">/ 共 ${items.length} 题${session.round > 1 ? `（第 ${session.round} 轮·错题重做）` : ''}</span>
+          <span class="muted">/ 共 ${items.length} 题${modeLabel ? `｜${modeLabel}` : ''}${session.round > 1 && session.mode !== 'wrong' ? `（第 ${session.round} 轮·错题重做）` : ''}</span>
         </span>
         <span>已作答 ${done} 题</span>
       </div>
@@ -566,7 +590,7 @@ async function practiceScreen(session, resumed) {
        *   - 错题重做轮（round > 1）：订正阶段才一题一答案。
        * 且重做轮里只在**这次仍然答错**时讲评，答对就继续（不打断节奏）。
        */
-      if (session.round > 1) {
+      if (session.round > 1 || session.mode === 'wrong') {
         const t = await INVOKE('teach:mistake', { questionId: it.questionId, sessionId: session.id });
         const latest = t.ok && Array.isArray(t.history) && t.history.length ? t.history[0] : null;
         const justWrong = Boolean(latest) && !latest.correct;

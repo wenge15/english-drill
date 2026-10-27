@@ -508,8 +508,9 @@ test('讲评只能在错题重做轮出现：普通练习绝不揭晓答案', ()
   assert.ok(start > -1, '应能找到统一作答入口');
   const block = html.slice(start, start + 2000);
 
-  // 核心规则：必须先判断是重做轮，才允许调用 teach:mistake / 渲染讲评
-  assert.ok(/if \(session\.round > 1\)/.test(block), '讲评必须以「重做轮（round > 1）」为前提');
+  // 核心规则：必须先判断是重做轮或错题模式，才允许调用 teach:mistake / 渲染讲评
+  assert.ok(/if \(session\.round > 1 \|\| session\.mode === 'wrong'\)/.test(block),
+    '讲评必须以「重做轮（round > 1）或错题模式」为前提');
   assert.ok(/justWrong/.test(block), '重做轮里也应只在此题这次仍答错时讲评');
 
   // 反例：不允许再出现「仅凭历史累计错次就弹讲评」的旧写法
@@ -519,4 +520,16 @@ test('讲评只能在错题重做轮出现：普通练习绝不揭晓答案', ()
   // 普通练习路径必须是无条件进入下一题
   assert.ok(/setTimeout\(\(\) => \{ idx \+= 1; render\(\); \}, 180\);/.test(block),
     '普通练习应直接进入下一题、不揭晓答案');
+});
+
+test('三个练习模式：今日页三个按钮，各自按 mode 开启会话', () => {
+  assert.ok(/id="startNew"/.test(html), '应有「练习新题」按钮');
+  assert.ok(/id="startReview"/.test(html), '应有「复习」按钮');
+  assert.ok(/id="startWrong"/.test(html), '应有「错题模式」按钮');
+  assert.ok(/practice:modeCounts/.test(html), '应查询各模式可练数量');
+  assert.ok(/practice:start', \{ mode \}/.test(html), '开练应带 mode');
+  assert.ok(/startMode\('new'\)/.test(html) && /startMode\('review'\)/.test(html) && /startMode\('wrong'\)/.test(html),
+    '三个按钮应分别以对应 mode 开练');
+  // 练习页顶部显示当前模式
+  assert.ok(/练习新题/.test(html) && /错题模式/.test(html), '练习页应能显示当前模式');
 });

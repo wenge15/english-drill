@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   finished_at INTEGER,
   phase TEXT NOT NULL,
   round INTEGER DEFAULT 1,
+  mode TEXT DEFAULT 'mixed',
   total INTEGER DEFAULT 0,
   correct INTEGER DEFAULT 0,
   accuracy REAL DEFAULT 0
@@ -191,6 +192,10 @@ function createRepo(dbPath) {
     }
     if (!qCols.includes('favorite')) {
       db.exec('ALTER TABLE questions ADD COLUMN favorite INTEGER DEFAULT 0');
+    }
+    const sCols = db.prepare('PRAGMA table_info(sessions)').all().map((c) => c.name);
+    if (!sCols.includes('mode')) {
+      db.exec("ALTER TABLE sessions ADD COLUMN mode TEXT DEFAULT 'mixed'");
     }
     // 索引在补列之后建：老库原本没有 group_id 列，先建索引会报错
     db.exec('CREATE INDEX IF NOT EXISTS idx_q_group ON questions(group_id)');
@@ -559,68 +564,123 @@ function createRepo(dbPath) {
     return { total, learned, due, new: fresh };
   }
 
-  /** 建今日会话；已有未完成的今日会话则返回它（续练）。 */
+  /**
+   * 三个练习模式各自可练的题数，供今日页按钮显示。
+   * total=候选总数；available=本次实际会出的数量；review 额外给 due（已到期数）。
+   */
+  function modeCounts(now = Date.now()) {
+    const newTotal = db.prepare('SELECT COUNT(*) c FROM questions WHERE archived = 0 AND reps = 0').get().c;
+    const reviewTotal = db.prepare('SELECT COUNT(*) c FROM questions WHERE archived = 0 AND reps > 0').get().c;
+    const reviewDue = db.prepare('SELECT COUNT(*) c FROM questions WHERE archived = 0 AND reps > 0 AND due_at <= ?').get(now).c;
+    const wrongTotal = db
+      .prepare(`SELECT COUNT(*) c FROM (
+        SELECT q.id FROM questions q LEFT JOIN attempts a ON a.question_id = q.id AND a.correct = 0
+        WHERE q.archived = 0 AND (q.lapses > 0 OR a.id IS NOT NULL) GROUP BY q.id
+      )`)
+      .get().c;
+
+    const newLimit = getSetting('newLimit');
+    const maxTotal = getSetting('maxTotal');
+    return {
+      new: { total: newTotal, available: Math.min(newTotal, newLimit) },
+      review: { total: reviewTotal, due: reviewDue, available: Math.min(reviewTotal, maxTotal) },
+      wrong: { total: wrongTotal, available: Math.min(wrongTotal, maxTotal) },
+    };
+  }
+
+  /** 建今日会话；已有未完成的同模式会话则返回它（续练）。 */
   function startDailySession(opts = {}) {
     const now = opts.now ?? Date.now();
     const day = localDay(now);
+    const mode = opts.mode || 'mixed';
     if (!opts.force) {
       const existing = db
-        .prepare("SELECT * FROM sessions WHERE day = ? AND phase != 'done' ORDER BY id DESC LIMIT 1")
-        .get(day);
+        .prepare("SELECT * FROM sessions WHERE day = ? AND phase != 'done' AND mode = ? ORDER BY id DESC LIMIT 1")
+        .get(day, mode);
       if (existing) return { session: existing, resumed: true };
     }
 
     const shuffleOptions = getSetting('shuffleOptions');
     const shuffleOrder = getSetting('shuffleOrder');
-    // 关掉乱序时用"录入顺序"（最早录入的在前），这样按单元刷题是从第 1 题开始
-    const all = listQuestions({ limit: 5000, order: shuffleOrder ? 'desc' : 'asc' });
-    const queue = srs.buildDailyQueue(all, {
-      now,
-      newLimit: getSetting('newLimit'),
-      maxTotal: getSetting('maxTotal'),
-      shuffleOrder,
-      rng: opts.rng,
-    });
-
-    // 今日手选题排到队列**最前面**。
-    //
-    // 踩过的坑（验收时发现）：早期实现是"已在正常队列里就跳过"，
-    // 结果手选题只是留在它原本的 SRS 位置上，根本没有优先——
-    // 用户勾了"今天要练"却发现还是排在第 30 题。
-    // 正确做法：先把手选题从正常队列里**摘掉**，再整体前置，这样它一定在最前。
-    // 归档/已删除的题跳过。纳入后即消费，删除今天的 picks。
+    const newLimit = getSetting('newLimit');
     const maxTotal = getSetting('maxTotal');
-    const pickIds = db
-      .prepare('SELECT question_id FROM daily_picks WHERE day = ? ORDER BY created_at, question_id')
-      .all(day)
-      .map((r) => r.question_id);
-    // pickIds 来自 daily_picks 主键表，本身不会重复，直接取题即可。
-    const pickIdSet = new Set(pickIds);
-    const pickedQueue = [];
-    for (const pid of pickIds) {
-      const q = getQuestion(pid);
-      if (!q || q.archived) continue;
-      pickedQueue.push(q);
-    }
-    // 正常队列里把手选题摘掉，避免同一题出现两次。
-    const restQueue = queue.filter((q) => !pickIdSet.has(q.id));
-    // 手选题全部纳入（优先），正常队列按剩余名额截断。
-    const remaining = Math.max(0, maxTotal - pickedQueue.length);
-    const finalQueue = [...pickedQueue, ...restQueue.slice(0, remaining)];
-    if (pickedQueue.length > 0) {
-      db.prepare('DELETE FROM daily_picks WHERE day = ?').run(day);
+
+    let queue = [];
+    let round = 1;
+    let phase = 'answering';
+
+    if (mode === 'new') {
+      // 只练第一次（reps=0）；shuffleOrder 开则打乱，否则按录入顺序。
+      let rows = db
+        .prepare('SELECT * FROM questions WHERE archived = 0 AND reps = 0 ORDER BY created_at ASC, id ASC')
+        .all();
+      if (shuffleOrder) rows = srs.shuffleInPlace(rows, opts.rng);
+      queue = rows.slice(0, newLimit).map(rowToQuestion);
+    } else if (mode === 'review') {
+      // 所有写过的题（reps>0）；到期优先（dueAt 升序，未到期的排后面）。
+      const rows = db
+        .prepare('SELECT * FROM questions WHERE archived = 0 AND reps > 0 ORDER BY COALESCE(due_at, 0) ASC, id ASC')
+        .all();
+      queue = rows.slice(0, maxTotal).map(rowToQuestion);
+    } else if (mode === 'wrong') {
+      // 所有曾经错过的题；错次数多优先，其次到期早优先。订正轮：一题一答案。
+      const rows = db
+        .prepare(`SELECT q.*, COUNT(a.id) AS wrong_count
+          FROM questions q LEFT JOIN attempts a ON a.question_id = q.id AND a.correct = 0
+          WHERE q.archived = 0 AND (q.lapses > 0 OR a.id IS NOT NULL)
+          GROUP BY q.id
+          ORDER BY wrong_count DESC, COALESCE(q.due_at, 0) ASC, q.id ASC`)
+        .all();
+      queue = rows.slice(0, maxTotal).map(rowToQuestion);
+      round = 2;
+      phase = 'reviewing';
+    } else {
+      // 'mixed'：保持现有逻辑不变（含今日手选前置）。
+      const all = listQuestions({ limit: 5000, order: shuffleOrder ? 'desc' : 'asc' });
+      queue = srs.buildDailyQueue(all, {
+        now,
+        newLimit,
+        maxTotal,
+        shuffleOrder,
+        rng: opts.rng,
+      });
+
+      // 今日手选题排到队列**最前面**。
+      //
+      // 踩过的坑（验收时发现）：早期实现是"已在正常队列里就跳过"，
+      // 结果手选题只是留在它原本的 SRS 位置上，根本没有优先——
+      // 用户勾了"今天要练"却发现还是排在第 30 题。
+      // 正确做法：先把手选题从正常队列里**摘掉**，再整体前置，这样它一定在最前。
+      // 归档/已删除的题跳过。纳入后即消费，删除今天的 picks。
+      const pickIds = db
+        .prepare('SELECT question_id FROM daily_picks WHERE day = ? ORDER BY created_at, question_id')
+        .all(day)
+        .map((r) => r.question_id);
+      const pickIdSet = new Set(pickIds);
+      const pickedQueue = [];
+      for (const pid of pickIds) {
+        const q = getQuestion(pid);
+        if (!q || q.archived) continue;
+        pickedQueue.push(q);
+      }
+      const restQueue = queue.filter((q) => !pickIdSet.has(q.id));
+      const remaining = Math.max(0, maxTotal - pickedQueue.length);
+      queue = [...pickedQueue, ...restQueue.slice(0, remaining)];
+      if (pickedQueue.length > 0) {
+        db.prepare('DELETE FROM daily_picks WHERE day = ?').run(day);
+      }
     }
 
-    if (finalQueue.length === 0) return { session: null, resumed: false, empty: true };
+    if (queue.length === 0) return { session: null, resumed: false, empty: true };
 
-    const info = db.prepare('INSERT INTO sessions(day, started_at, phase, round, total) VALUES(?,?,?,?,?)')
-      .run(day, now, 'answering', 1, finalQueue.length);
+    const info = db.prepare('INSERT INTO sessions(day, started_at, phase, round, mode, total) VALUES(?,?,?,?,?,?)')
+      .run(day, now, phase, round, mode, queue.length);
     const sessionId = Number(info.lastInsertRowid);
 
     const insert = db.prepare('INSERT INTO practice_questions(session_id, question_id, position, round) VALUES(?,?,?,?)');
-    finalQueue.forEach((q, i) => {
-      insert.run(sessionId, q.id, i, 1);
-      if (shuffleOptions) presentationOf(sessionId, q.id, 1, q);
+    queue.forEach((q, i) => {
+      insert.run(sessionId, q.id, i, round);
+      if (shuffleOptions) presentationOf(sessionId, q.id, round, q);
     });
 
     return { session: db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId), resumed: false };
@@ -672,6 +732,7 @@ function createRepo(dbPath) {
       day: s.day,
       phase: s.phase,
       round: s.round,
+      mode: s.mode,
       startedAt: s.started_at,
       finishedAt: s.finished_at,
       total: s.total,
@@ -1281,16 +1342,25 @@ function createRepo(dbPath) {
     }
 
     // 记录计划（含每天的时间戳），供界面展示
+    //
+    // 落地时间统一设为"当天早上 8 点"，避免凌晨就把题推到待复习。
+    // 但**第 1 天必须例外**：真实 bug —— 用户凌晨 1 点应用集训，第 1 天的题
+    // 到期时间被设成当天 08:00，此刻还没到，于是"待复习 0 道"，
+    // 点了集训却一道题都练不了。第 1 天要保证"现在就能练"，取 min(now, 当天8点)。
+    const EIGHT_HOURS = 8 * 3600 * 1000;
     const plan = buckets
       .filter((b) => b.questions.length > 0)
-      .map((b) => ({
-        dayIndex: b.dayIndex,
-        date: localDay(b.date.getTime()),
-        at: b.date.getTime() + 8 * 3600 * 1000, // 当天早上 8 点，避免凌晨提醒
-        count: b.questions.length,
-        questionIds: b.questions.map((q) => q.id),
-        knowledgePoints: [...new Set(b.questions.flatMap((q) => JSON.parse(q.knowledge_points || '[]')))].slice(0, 8),
-      }));
+      .map((b) => {
+        const at8 = b.date.getTime() + EIGHT_HOURS;
+        return {
+          dayIndex: b.dayIndex,
+          date: localDay(b.date.getTime()),
+          at: b.dayIndex === 1 ? Math.min(now, at8) : at8,
+          count: b.questions.length,
+          questionIds: b.questions.map((q) => q.id),
+          knowledgePoints: [...new Set(b.questions.flatMap((q) => JSON.parse(q.knowledge_points || '[]')))].slice(0, 8),
+        };
+      });
 
     return {
       ok: true,
@@ -1596,6 +1666,7 @@ function createRepo(dbPath) {
     listArchived,
     deleteImpact,
     countQuestions,
+    modeCounts,
     startDailySession,
     sessionDetail,
     recordAnswer,

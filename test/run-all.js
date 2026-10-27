@@ -61,6 +61,7 @@ const EXPECTED = {
   'group-sprint.test.js': 19,
   'http.test.js': 94,
   'knowledge.test.js': 28,
+  'mode.test.js': 5,
   'model.test.js': 28,
   'reset.test.js': 11,
   'retry-all.test.js': 3,
@@ -69,7 +70,7 @@ const EXPECTED = {
   'srs.test.js': 15,
   'teach-chat.test.js': 22,
   'textparse.test.js': 18,
-  'ui.test.js': 36,
+  'ui.test.js': 38,
   'zip.test.js': 16,
 };
 
