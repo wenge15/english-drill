@@ -53,7 +53,7 @@ test('不把 API Key 硬编码进界面', () => {
   assert.ok(!/sk-[a-zA-Z0-9]{16,}/.test(html), '界面里不应出现密钥');
 });
 
-test('作答阶段：第一次错不揭晓，只有第二次错才就地讲评（用户明确要求）', () => {
+test('作答阶段：普通练习绝不揭晓答案，只有错题重做轮才就地讲评（用户明确要求）', () => {
   const start = html.indexOf('async function practiceScreen');
   const finish = html.indexOf('async function renderFinish');
   assert.ok(start !== -1 && finish > start, '应能定位到作答阶段代码');
@@ -64,14 +64,26 @@ test('作答阶段：第一次错不揭晓，只有第二次错才就地讲评�
   assert.ok(/classList\.add\('picked'\)/.test(answering), '点击后应标记为已选（中性状态）');
   assert.ok(!/classList\.add\('(right|wrong)/.test(answering), '不应即时高亮正确/错误选项');
 
-  // 揭晓必须由"错了几次"这个条件门控 —— 第一次错不能揭晓
-  assert.ok(/wrongCount\s*>=\s*2/.test(answering), '揭晓答案必须用 wrongCount >= 2 门控');
-  const gateIdx = answering.indexOf('wrongCount >= 2');
+  /**
+   * 用户明确要求：只有点开「错题练习（重做轮）」才一题一答案；
+   * 普通练习（round === 1）一道都不许揭晓，练完才公布正确率。
+   *
+   * 这里曾经踩过坑：旧逻辑只看 wrongCount（历史累计错次）>= 2 就弹讲评，
+   * 而用户题库里很多题早就错过两次以上 —— 于是普通练习每碰到一道历史错题
+   * 就弹一次答案，核心规则被彻底破坏。
+   */
+  assert.ok(/session\.round > 1/.test(answering), '讲评必须由「错题重做轮（session.round > 1）」门控');
+  const gateIdx = answering.indexOf('session.round > 1');
   const teachIdx = answering.indexOf('renderInlineTeach');
   assert.ok(gateIdx !== -1 && teachIdx > gateIdx, '讲评应在门控之后才调用');
-  // 门控之后必须有"直接进入下一题"的分支，保证第一次错不展示任何答案
-  const between = answering.slice(gateIdx, gateIdx + 400);
-  assert.ok(/idx \+= 1/.test(between), '不满足条件时应直接进入下一题（不展示答案）');
+
+  // 不允许再出现"仅凭历史累计错次就弹答案"的写法
+  assert.ok(!/t\.ok && t\.wrongCount >= 2\)\s*\{\s*renderInlineTeach/.test(answering),
+    '不能仅凭 wrongCount（历史累计）就弹答案');
+
+  // 普通练习必须有无条件进入下一题的分支
+  assert.ok(/setTimeout\(\(\) => \{ idx \+= 1; render\(\); \}, 180\);/.test(answering),
+    '普通练习应直接进入下一题（不展示任何答案）');
 });
 
 test('第二次错时就地展开：正确答案、知识点、前几次答案、对话窗口（用户明确要求）', () => {
@@ -488,4 +500,23 @@ test('收藏与今日手选：练习页可收藏，题库页可筛选并加入�
   // 去重：后端用主键/单列保证，前端列表按 id 去重渲染
   assert.ok(/daily_picks/.test(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'core', 'db.js'), 'utf8')),
     'daily_picks 表应存在（主键去重）');
+});
+
+test('讲评只能在错题重做轮出现：普通练习绝不揭晓答案', () => {
+  // 定位 answerWith 的讲评分支
+  const start = html.indexOf('const answerWith = async (picked) =>');
+  assert.ok(start > -1, '应能找到统一作答入口');
+  const block = html.slice(start, start + 2000);
+
+  // 核心规则：必须先判断是重做轮，才允许调用 teach:mistake / 渲染讲评
+  assert.ok(/if \(session\.round > 1\)/.test(block), '讲评必须以「重做轮（round > 1）」为前提');
+  assert.ok(/justWrong/.test(block), '重做轮里也应只在此题这次仍答错时讲评');
+
+  // 反例：不允许再出现「仅凭历史累计错次就弹讲评」的旧写法
+  assert.ok(!/t\.ok && t\.wrongCount >= 2\)\s*\{\s*renderInlineTeach/.test(html),
+    '不能仅凭 wrongCount（历史累计）就弹答案');
+
+  // 普通练习路径必须是无条件进入下一题
+  assert.ok(/setTimeout\(\(\) => \{ idx \+= 1; render\(\); \}, 180\);/.test(block),
+    '普通练习应直接进入下一题、不揭晓答案');
 });

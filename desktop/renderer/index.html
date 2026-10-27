@@ -554,13 +554,28 @@ async function practiceScreen(session, resumed) {
       if (!r.ok) { toast(r.error, 'err'); return; }
       lastAnsweredIdx = idx;
 
-      // 第二次（及以上）做错 → 在题目下方直接展开讲评与对话窗口
-      const t = await INVOKE('teach:mistake', { questionId: it.questionId, sessionId: session.id });
-      if (t.ok && t.wrongCount >= 2) {
-        renderInlineTeach(it, picked, t, () => { idx += 1; render(); });
-      } else {
-        setTimeout(() => { idx += 1; render(); }, 180);
+      /**
+       * 只有「错题重做轮」才允许就地讲评（一题一答案），普通练习绝不剧透。
+       *
+       * 真实 bug（用户反馈）：以前这里只判断 t.wrongCount >= 2，而 wrongCount 是
+       * **历史累计**错次 —— 用户题库里很多题早已错过两次以上，于是今天做普通练习时
+       * 每碰到一道历史错题就弹一次答案，彻底破坏了「练完才公布正确率」这个核心规则。
+       *
+       * 正确语义（用户明确要求）：
+       *   - 普通练习（round === 1）：一道都不揭晓，直接进下一题；
+       *   - 错题重做轮（round > 1）：订正阶段才一题一答案。
+       * 且重做轮里只在**这次仍然答错**时讲评，答对就继续（不打断节奏）。
+       */
+      if (session.round > 1) {
+        const t = await INVOKE('teach:mistake', { questionId: it.questionId, sessionId: session.id });
+        const latest = t.ok && Array.isArray(t.history) && t.history.length ? t.history[0] : null;
+        const justWrong = Boolean(latest) && !latest.correct;
+        if (t.ok && justWrong) {
+          renderInlineTeach(it, picked, t, () => { idx += 1; render(); });
+          return;
+        }
       }
+      setTimeout(() => { idx += 1; render(); }, 180);
     };
 
     $('#opts').querySelectorAll('.opt').forEach((btn) => {
