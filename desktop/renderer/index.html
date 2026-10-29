@@ -243,6 +243,38 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 /** 把作答字母显示成人话：'IDK' 表示用户点了「我不会」，其余原样，空则「未作答」。 */
 const fmtPicked = (p) => (p === 'IDK' ? '我不会' : (p || '未作答'));
 
+/**
+ * 让新消息出现在合适的位置。
+ *
+ * 真实 bug（用户反馈）：AI 回答是长文本，如果每次都把容器滚到最底部，
+ * 用户看到的只是回答的**结尾**，得自己往上滚才能读到开头 ——
+ * 看起来就像"回答是从底部开始呈现的"。
+ *
+ * 正确行为：
+ *   - 助手的回答：滚到它自己的**开头**（block=start），从上往下读；
+ *   - 用户自己的提问：滚到底部（方便看到刚说的话）。
+ */
+function revealBubble(container, el, role) {
+  if (!container || !el) return;
+  const apply = () => {
+    try {
+      if (role === 'assistant') {
+        // 用相对位移算，避免依赖 offsetParent 是谁
+        const cRect = container.getBoundingClientRect();
+        const eRect = el.getBoundingClientRect();
+        container.scrollTop += eRect.top - cRect.top - 6;
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
+    } catch {
+      /* 滚动失败不影响内容显示 */
+    }
+  };
+  // 等一帧让新节点完成布局，否则位置算不准
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
+  else apply();
+}
+
 function toast(msg, kind = '') {
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
@@ -766,7 +798,8 @@ async function practiceScreen(session, resumed) {
         el.className = `msg ${role}${isError ? ' error' : ''}`;
         el.textContent = text;
         msgs.appendChild(el);
-        msgs.scrollTop = msgs.scrollHeight;
+        // 回答滚到开头、提问滚到底（见 revealBubble 的说明）
+        revealBubble(msgs, el, role);
       };
 
       const send = async () => {
@@ -3049,7 +3082,8 @@ function openChatPanel(opts = {}) {
     el.className = `msg ${role}${isError ? ' error' : ''}`;
     el.textContent = text;
     msgs.appendChild(el);
-    msgs.scrollTop = msgs.scrollHeight;
+    // 回答滚到开头、提问滚到底（见 revealBubble 的说明）
+    revealBubble(msgs, el, role);
     return el;
   };
 
@@ -3125,7 +3159,8 @@ screens.chat = async () => {
     el.className = `msg ${role}${isError ? ' error' : ''}`;
     el.textContent = text;
     msgsEl.appendChild(el);
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    // 回答滚到开头、提问滚到底（见 revealBubble 的说明）
+    revealBubble(msgsEl, el, role);
     return el;
   };
 
